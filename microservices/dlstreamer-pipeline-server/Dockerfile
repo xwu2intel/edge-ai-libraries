@@ -57,8 +57,8 @@ RUN apt-get install -y --no-install-recommends python3-dev
 
 # Build UDF loader lib
 RUN /bin/bash -c "echo $PATH && \
-                  pip3 install numpy==1.26.4 && \
-                  pip3 install Cython==0.29.34 && \
+                  pip3 install --no-cache-dir numpy==1.26.4 && \
+                  pip3 install --no-cache-dir Cython==0.29.34 && \
                   cd /home/pipeline-server/UDFLoader && \
                   rm -rf build && \
                   mkdir build && \
@@ -143,14 +143,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends git
 ENV PATH=$PATH:/home/pipeline-server/.local/bin
 
 COPY ./tests/requirements.txt /home/pipeline-server/tests/requirements.txt
-RUN pip3 install -r /home/pipeline-server/tests/requirements.txt
+RUN pip3 install --no-cache-dir -r /home/pipeline-server/tests/requirements.txt
 
 # Install for ntp timestamping
-RUN pip3 install ntplib==0.4.0
+RUN pip3 install --no-cache-dir ntplib==0.4.0
 
 #Patch and install OpenVINO model api
 COPY ./docker/model_api.patch /home/pipeline-server/model_api.patch
-RUN pip3 install openvino-model-api==0.2.5
+RUN pip3 install --no-cache-dir openvino-model-api==0.2.5
 
 # site packages path independent of Python version (Python 3.10 for Ubuntu 22.04 and Python 3.12 for Ubuntu 24.04)
 RUN MODEL_API_PATH=$(python3 -c "import site; print(site.getsitepackages()[0])")/model_api && \
@@ -167,13 +167,13 @@ RUN . /etc/os-release && \
         curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain 1.87.0 && \
         echo 'source $HOME/.cargo/env' >> ~/.bashrc && \
         export PATH="/root/.cargo/bin:$PATH" && \
-        pip install --upgrade pip && \
-        pip install geti-sdk==2.7.1 && \
+        pip install --no-cache-dir --upgrade pip && \
+        pip install --no-cache-dir geti-sdk==2.7.1 && \
         # clean up Rust installation files
         rm -rf /root/.cargo /root/.rustup; \
     else \
-        pip install --upgrade pip && \
-        pip install geti-sdk==2.7.1; \
+        pip install --no-cache-dir --upgrade pip && \
+        pip install --no-cache-dir geti-sdk==2.7.1; \
     fi && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/* /tmp/* /root/.cache
@@ -181,17 +181,17 @@ RUN . /etc/os-release && \
 
 
 # Uninstall cuda-python installed by Geti SDK because of proprietary license causing OSPDT issue
-RUN pip3 uninstall -y cuda-python aiohappyeyeballs
+RUN pip3 uninstall --no-cache-dir -y cuda-python aiohappyeyeballs
 
 # Install schedule for python job scheduling
-RUN pip3 install schedule==1.2.1
+RUN pip3 install --no-cache-dir schedule==1.2.1
 
 # Install opcua
-RUN pip3 install asyncua==1.1.5
+RUN pip3 install --no-cache-dir asyncua==1.1.5
 
 # Downgrading Flask due to an atttribute error(JSONEncoder)
-RUN pip3 uninstall -y Flask && \
-    pip3 install Flask==2.2.5
+RUN pip3 uninstall --no-cache-dir -y Flask && \
+    pip3 install --no-cache-dir Flask==2.2.5
 
 # Visualizer webtrc requirements
 RUN apt-get update && apt-get install libnice10 libnice-dev -y --no-install-recommends
@@ -200,10 +200,10 @@ RUN apt-get update && apt-get install libnice10 libnice-dev -y --no-install-reco
 WORKDIR /thirdparty
 
 USER root
-RUN pip3 install pydantic==2.8.2
+RUN pip3 install --no-cache-dir pydantic==2.8.2
 
 RUN apt-get update && apt-get install libxtst6 -y --no-install-recommends
-RUN pip3 install deep_sort_realtime
+RUN pip3 install --no-cache-dir deep_sort_realtime
 
 ARG DOWNLOAD_GPL_SOURCES
 
@@ -271,17 +271,17 @@ COPY ./src/ ./src
 
 # Install server requirements
 USER root
-RUN pip3 install PyYAML==5.4.1 --no-build-isolation && \
-    pip3 install -r  /home/pipeline-server/src/server/requirements.service.txt \
+RUN pip3 install --no-cache-dir PyYAML==5.4.1 --no-build-isolation && \
+    pip3 install --no-cache-dir -r  /home/pipeline-server/src/server/requirements.service.txt \
                  -r /home/pipeline-server/src/server/requirements.webrtc.txt \
                  -r /home/pipeline-server/src/server/requirements.txt && \
-    python3 -m pip install --upgrade Werkzeug==3.1.3 orjson==3.10.12 packaging==24.2 boto3==1.36.17
+    python3 -m pip install --no-cache-dir --upgrade Werkzeug==3.1.3 orjson==3.10.12 packaging==24.2 boto3==1.36.17
 USER ${USER}
 
 # OpenTelemetry
 USER root
-RUN pip3 install --no-cache -r  /home/pipeline-server/src/opentelemetry/requirements.txt
-RUN pip3 install --upgrade opentelemetry-exporter-otlp
+RUN pip3 install --no-cache-dir -r  /home/pipeline-server/src/opentelemetry/requirements.txt
+RUN pip3 install --no-cache-dir --upgrade opentelemetry-exporter-otlp
 USER ${USER}
 
 # Disable OpenVINO Telemetry
