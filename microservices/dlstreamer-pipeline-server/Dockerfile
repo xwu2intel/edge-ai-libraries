@@ -112,23 +112,22 @@ ENV PYTHONPATH=/opt/intel/dlstreamer/gstreamer/lib/python3/dist-packages:/opt/in
 WORKDIR /home/pipeline-server
 
 RUN export no_proxy= && \
-    apt-get update --allow-releaseinfo-change && apt-get install -y --no-install-recommends git autoconf  \
-    automake \
-    libglib2.0-dev \
-    libusb-1.0-0-dev \
+    apt-get update --allow-releaseinfo-change && apt-get install -y --no-install-recommends git \
+    libglib2.0-0 \
+    libusb-1.0-0 \
     libtool \
-    zlib1g-dev \
-    make \
+    zlib1g \
     zip \
     unzip \
-    libopencv-dev \
-    libcjson-dev && \
+    libopencv-core4.5d \
+    libcjson1 && \
+    apt clean && \
     rm -rf /var/lib/apt/lists/*
 
 
 RUN apt-get update && apt-get install -y --no-install-recommends wget && \
-    wget -qO- https://cmake.org/files/v3.15/cmake-3.15.0-Linux-x86_64.tar.gz | \
-    tar --strip-components=1 -xz -C /usr/local
+    apt clean && \
+    rm -rf /var/lib/apt/lists/*
 
 ARG CMAKE_INSTALL_PREFIX
 ARG UTILS_LIB_VERSION
@@ -239,7 +238,7 @@ ENV LD_LIBRARY_PATH ${LD_LIBRARY_PATH}:/usr/local/lib:/home/pipeline-server:${CM
 
 ### To install other/newer Genicam camera SDKs add the installation steps here
 
-RUN apt-get update && apt-get install -y --no-install-recommends git
+#RUN apt-get update && apt-get install -y --no-install-recommends git
 
 ENV PATH=$PATH:/home/pipeline-server/.local/bin
 
@@ -295,7 +294,9 @@ RUN pip3 uninstall --no-cache-dir -y Flask && \
     pip3 install --no-cache-dir Flask==2.2.5
 
 # Visualizer webtrc requirements
-RUN apt-get update && apt-get install libnice10 libnice-dev -y --no-install-recommends
+RUN apt-get update && apt-get install libnice10 libnice-dev -y --no-install-recommends && \
+    apt clean && \
+    rm -rf /var/lib/apt/lists/*
 #RUN cp /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstnice.so /opt/intel/dlstreamer/lib/gstreamer-1.0
 
 WORKDIR /thirdparty
@@ -303,7 +304,9 @@ WORKDIR /thirdparty
 USER root
 RUN pip3 install --no-cache-dir pydantic==2.8.2
 
-RUN apt-get update && apt-get install libxtst6 -y --no-install-recommends
+RUN apt-get update && apt-get install libxtst6 -y --no-install-recommends && \
+    apt clean && \
+    rm -rf /var/lib/apt/lists/*
 RUN pip3 install --no-cache-dir deep_sort_realtime
 
 ARG DOWNLOAD_GPL_SOURCES
