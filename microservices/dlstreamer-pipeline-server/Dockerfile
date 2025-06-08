@@ -142,8 +142,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends git
 
 ENV PATH=$PATH:/home/pipeline-server/.local/bin
 
-COPY ./tests/requirements.txt /home/pipeline-server/tests/requirements.txt
-RUN pip3 install --no-cache-dir -r /home/pipeline-server/tests/requirements.txt
+#COPY ./tests/requirements.txt /home/pipeline-server/tests/requirements.txt
+#RUN pip3 install --no-cache-dir -r /home/pipeline-server/tests/requirements.txt
 
 # Install for ntp timestamping
 RUN pip3 install --no-cache-dir ntplib==0.4.0
@@ -297,7 +297,7 @@ COPY ./user_scripts/udfs/python/dummy_publisher.py /home/pipeline-server/udfs/py
 COPY ./user_scripts/udfs/python/geti_udf/ /home/pipeline-server/udfs/python/geti_udf/
 
 # Copy unit tests
-COPY ./tests /home/pipeline-server/tests
+#COPY ./tests /home/pipeline-server/tests
 
 # Copy geti pallet defect detection sample
 COPY ./resources/models/geti /home/pipeline-server/resources/models/geti
