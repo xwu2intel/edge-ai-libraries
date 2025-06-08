@@ -294,7 +294,7 @@ RUN pip3 uninstall --no-cache-dir -y Flask && \
     pip3 install --no-cache-dir Flask==2.2.5
 
 # Visualizer webtrc requirements
-RUN apt-get update && apt-get install libnice10 libnice-dev -y --no-install-recommends && \
+RUN apt-get update && apt-get install libnice10 -y --no-install-recommends && \
     apt clean && \
     rm -rf /var/lib/apt/lists/*
 #RUN cp /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstnice.so /opt/intel/dlstreamer/lib/gstreamer-1.0
