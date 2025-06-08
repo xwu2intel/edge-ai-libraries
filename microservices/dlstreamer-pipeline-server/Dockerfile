@@ -1,5 +1,6 @@
 ARG BASE_IMAGE
-FROM ${BASE_IMAGE} AS dlstreamer-pipeline-server
+
+FROM ${BASE_IMAGE} AS gstudfloader-builder
 ENV DLSTREAMER_DIR=/opt/intel/dlstreamer
 ENV GSTREAMER_DIR=$DLSTREAMER_DIR/gstreamer
 
@@ -98,6 +99,105 @@ RUN /bin/bash -c "cd /home/pipeline-server/gst-udf-loader/ \
     && cmake -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DCMAKE_INSTALL_INCLUDEDIR=${CMAKE_INSTALL_PREFIX}/include -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX} .. \
     && make"
 
+FROM ${BASE_IMAGE} AS dlstreamer-pipeline-server
+ENV DLSTREAMER_DIR=/opt/intel/dlstreamer
+ENV GSTREAMER_DIR=$DLSTREAMER_DIR/gstreamer
+
+USER root
+
+ENV VIRTUAL_ENV=/python3venv
+ENV PATH=$VIRTUAL_ENV/bin:$PATH
+ENV PYTHONPATH=/opt/intel/dlstreamer/gstreamer/lib/python3/dist-packages:/opt/intel/dlstreamer/python:/opt/intel/dlstreamer/gstreamer/lib/python3/dist-packages
+
+WORKDIR /home/pipeline-server
+
+RUN export no_proxy= && \
+    apt-get update --allow-releaseinfo-change && apt-get install -y --no-install-recommends git autoconf  \
+    automake \
+    libglib2.0-dev \
+    libusb-1.0-0-dev \
+    libtool \
+    zlib1g-dev \
+    make \
+    zip \
+    unzip \
+    libopencv-dev \
+    libcjson-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+
+RUN apt-get update && apt-get install -y --no-install-recommends wget && \
+    wget -qO- https://cmake.org/files/v3.15/cmake-3.15.0-Linux-x86_64.tar.gz | \
+    tar --strip-components=1 -xz -C /usr/local
+
+ARG CMAKE_INSTALL_PREFIX
+ARG UTILS_LIB_VERSION
+ARG MSGBUS_LIB_VERSION
+
+COPY packages/eii-utils-${UTILS_LIB_VERSION}-Linux.deb ${WORKDIR}
+#COPY packages/util-${UTILS_LIB_VERSION}.zip ${WORKDIR}
+
+COPY packages/eii-messagebus-${MSGBUS_LIB_VERSION}-Linux.deb ${WORKDIR}
+#COPY packages/UDFLoader.zip ${WORKDIR}
+#COPY packages/udfs.zip ${WORKDIR}
+
+# Installation of utils, eiimessagebus and debian packages. Needed for UDFLoader build
+RUN dpkg -i /home/pipeline-server/eii-utils-${UTILS_LIB_VERSION}-Linux.deb && \
+    dpkg -i /home/pipeline-server/eii-messagebus-${MSGBUS_LIB_VERSION}-Linux.deb && \
+    rm -rf eii-*.deb
+
+#RUN unzip UDFLoader.zip -d /home/pipeline-server && \
+#    unzip udfs.zip -d /home/pipeline-server && \
+#    unzip util-${UTILS_LIB_VERSION}.zip -d /home/pipeline-server && \
+#    rm -rf udfs.zip UDFLoader.zip util-*.zip
+
+#COPY ./plugins/gst-udf-loader/ /home/pipeline-server/gst-udf-loader
+
+#RUN apt-get install -y --no-install-recommends python3-dev
+
+# Build UDF loader lib
+#RUN /bin/bash -c "echo $PATH && \
+#                  pip3 install --no-cache-dir numpy==1.26.4 && \
+#                  pip3 install --no-cache-dir Cython==0.29.34 && \
+#                  cd /home/pipeline-server/UDFLoader && \
+#                  rm -rf build && \
+#                  mkdir build && \
+#                  cd build && \
+#                  cmake -DCMAKE_INSTALL_INCLUDEDIR=$CMAKE_INSTALL_PREFIX/include -DCMAKE_INSTALL_PREFIX=$CMAKE_INSTALL_PREFIX -DWITH_TESTS=${RUN_TESTS} -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} \
+#                  .. && \
+#                  make && \
+#                  if [ "${RUN_TESTS}" = "ON" ] ; then \
+#                     cd ./tests && \
+#                     source ./source.sh && \
+#                     ./frame-tests && \
+#                     ./udfloader-tests && \
+#                     cd .. ; \
+#                  fi && \
+#                  make install"
+
+ENV LD_LIBRARY_PATH=${CMAKE_INSTALL_PREFIX}/lib:${CMAKE_INSTALL_PREFIX}/lib/udfs:${DLSTREAMER_DIR}/lib:${DLSTREAMER_DIR}/lib/gstreamer-1.0:${LD_LIBRARY_PATH}:/root/.local/bin \
+    LIBRARY_PATH=/opt/intel/dlstreamer/gstreamer/lib/:${LIBRARY_PATH} \
+    CPLUS_INCLUDE_PATH=${CPLUS_INCLUDE_PATH}:${DLSTREAMER_DIR}/include/dlstreamer/gst/videoanalytics:${DLSTREAMER_DIR}/include/dlstreamer/gst/metadata:/root/.local/bin:${DLSTREAMER_DIR}/gstreamer/include/gstreamer-1.0/ \
+    C_INCLUDE_PATH=${C_INCLUDE_PATH}:${DLSTREAMER_DIR}/gstreamer/include/gstreamer-1.0/ \
+    PYTHONPATH=$PYTHONPATH:/usr/local/lib/:/root/.local/bin \
+    PATH=$PATH:${DLSTREAMER_DIR}/gstreamer/bin:${DLSTREAMER_DIR}/gstreamer/bin/gstreamer-1.0:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.local/bin \
+    PKG_CONFIG_PATH=/usr/share/pkgconfig:/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/lib/pkgconfig:/opt/intel/dlstreamer/gstreamer/lib/pkgconfig:/opt/intel/dlstreamer/build/intel64/Release/lib/pkgconfig:
+
+#RUN export no_proxy= && \
+#    apt-get update && \
+#    apt-get install -y -q --no-install-recommends libdrm-dev=\* && \
+#    apt-get clean && \
+#    rm -rf /var/lib/apt/lists/*
+
+# Build gst-udf-loader plugin
+#RUN /bin/bash -c "cd /home/pipeline-server/gst-udf-loader/ \
+#    && if [ -d \"build\" ] ; then rm -rf build ; fi \
+#    && mkdir build \
+#    && cd gst_plugin && sed -i '/dlstreamer_gst_meta/c\\\t/opt/intel/dlstreamer/build/intel64/Release/lib/libdlstreamer_gst_meta.so' CMakeLists.txt && cd .. \
+#    && cd build \
+#    && cmake -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE} -DCMAKE_INSTALL_INCLUDEDIR=${CMAKE_INSTALL_PREFIX}/include -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX} .. \
+#    && make"
+
 ############################# DL Streamer Pipeline Server runtime ################################
 
 USER root
@@ -114,8 +214,9 @@ ENV GST_DEBUG="1"
 
 ARG CMAKE_INSTALL_PREFIX
 
-RUN cp ${CMAKE_INSTALL_PREFIX}/lib/libeiiudfloader.so ${DLSTREAMER_DIR}/gstreamer/lib
-RUN cp /home/pipeline-server/gst-udf-loader/build/gst_plugin/libgstudfloader.so ${DLSTREAMER_DIR}/gstreamer/lib
+COPY --from=gstudfloader-builder ${CMAKE_INSTALL_PREFIX}/lib/udf.so ${DLSTREAMER_DIR}/gstreamer/lib
+COPY --from=gstudfloader-builder ${CMAKE_INSTALL_PREFIX}/lib/libeiiudfloader.so ${DLSTREAMER_DIR}/gstreamer/lib
+COPY --from=gstudfloader-builder /home/pipeline-server/gst-udf-loader/build/gst_plugin/libgstudfloader.so ${DLSTREAMER_DIR}/gstreamer/lib
 
 ARG USER
 ARG UID
