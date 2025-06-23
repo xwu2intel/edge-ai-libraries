@@ -100,6 +100,29 @@ RUN /bin/bash -c "cd /home/pipeline-server/gst-udf-loader/ \
 
 ############################# DL Streamer Pipeline Server runtime ################################
 
+FROM ${BASE_IMAGE} AS tmp
+USER root
+RUN apt-get update && apt-get install -y zip unzip
+WORKDIR /home/pipeline-server
+
+ARG UTILS_LIB_VERSION
+ARG MSGBUS_LIB_VERSION
+
+COPY packages/UDFLoader.zip ${WORKDIR}
+COPY packages/udfs.zip ${WORKDIR}
+COPY packages/util-${UTILS_LIB_VERSION}.zip ${WORKDIR}
+
+RUN unzip UDFLoader.zip && \
+    unzip udfs.zip && \
+    unzip util-${UTILS_LIB_VERSION}.zip
+
+COPY packages/eii-utils-${UTILS_LIB_VERSION}-Linux.deb ${WORKDIR}
+COPY packages/eii-messagebus-${MSGBUS_LIB_VERSION}-Linux.deb ${WORKDIR}
+
+# Installation of utils, eiimessagebus and debian packages. Needed for UDFLoader build
+RUN dpkg -i /home/pipeline-server/eii-utils-${UTILS_LIB_VERSION}-Linux.deb && \
+    dpkg -i /home/pipeline-server/eii-messagebus-${MSGBUS_LIB_VERSION}-Linux.deb
+
 FROM ${BASE_IMAGE} AS dlstreamer-pipeline-server
 
 ENV DLSTREAMER_DIR=/opt/intel/dlstreamer
@@ -116,52 +139,39 @@ WORKDIR /home/pipeline-server
 RUN . /etc/os-release && \
     if [ "$VERSION_ID" = "24.04" ]; then \
         export no_proxy= && \
-        apt-get update --allow-releaseinfo-change && apt-get install -y --no-install-recommends git \
+        apt-get update --allow-releaseinfo-change && apt-get install -y --no-install-recommends \
         libglib2.0-0 \
         libusb-1.0-0 \
         libtool \
         zlib1g \
-        zip \
-        unzip \
         libopencv-core406 \
         libopencv-imgcodecs406 \
-        libcjson1; \
+        libcjson1 \
+        libxtst6; \
     else \
         export no_proxy= && \
-        apt-get update --allow-releaseinfo-change && apt-get install -y --no-install-recommends git \
+        apt-get update --allow-releaseinfo-change && apt-get install -y --no-install-recommends \
         libglib2.0-0 \
         libusb-1.0-0 \
         libtool \
         zlib1g \
-        zip \
-        unzip \
         libopencv-core4.5d \
         libopencv-imgcodecs4.5d \
-        libcjson1; \
+        libcjson1 \
+        libxtst6; \
     fi && \
     apt clean && \
     rm -rf /var/lib/apt/lists/*
 
 ARG CMAKE_INSTALL_PREFIX
 ARG UTILS_LIB_VERSION
-ARG MSGBUS_LIB_VERSION
 
-COPY packages/eii-utils-${UTILS_LIB_VERSION}-Linux.deb ${WORKDIR}
-COPY packages/eii-messagebus-${MSGBUS_LIB_VERSION}-Linux.deb ${WORKDIR}
-COPY packages/util-${UTILS_LIB_VERSION}.zip ${WORKDIR}
-
-# Installation of utils, eiimessagebus and debian packages. Needed for UDFLoader build
-RUN dpkg -i /home/pipeline-server/eii-utils-${UTILS_LIB_VERSION}-Linux.deb && \
-    dpkg -i /home/pipeline-server/eii-messagebus-${MSGBUS_LIB_VERSION}-Linux.deb && \
-    rm -rf eii-*.deb
-
-COPY packages/UDFLoader.zip ${WORKDIR}
-COPY packages/udfs.zip ${WORKDIR}
-
-RUN unzip UDFLoader.zip -d /home/pipeline-server && \
-    unzip udfs.zip -d /home/pipeline-server && \
-    unzip util-${UTILS_LIB_VERSION}.zip -d /home/pipeline-server && \
-    rm -rf udfs.zip UDFLoader.zip util-*.zip
+# The UDF loader does not install any python files thus has no impact to the DLSPS image. 
+#COPY --from=tmp /home/pipeline-server/UDFLoader/ /home/pipeline-server/UDFLoader/
+COPY --from=tmp /home/pipeline-server/udfs/python/ /home/pipeline-server/udfs/python/
+COPY --from=tmp /home/pipeline-server/util/*.py /home/pipeline-server/util/
+COPY --from=tmp /usr/lib/libeii*.so /usr/lib/libsafestring.so /usr/lib/
+#COPY --from=tmp /usr/bin/json-schema-validate /usr/bin/
 
 ENV LD_LIBRARY_PATH=${CMAKE_INSTALL_PREFIX}/lib:${CMAKE_INSTALL_PREFIX}/lib/udfs:${DLSTREAMER_DIR}/lib:${DLSTREAMER_DIR}/lib/gstreamer-1.0:${LD_LIBRARY_PATH}:/root/.local/bin \
     LIBRARY_PATH=/opt/intel/dlstreamer/gstreamer/lib/:${LIBRARY_PATH} \
@@ -208,10 +218,6 @@ RUN mkdir -p $XDG_RUNTIME_DIR && chmod -R g+s $XDG_RUNTIME_DIR && chown ${USER}:
 ENV LD_LIBRARY_PATH ${LD_LIBRARY_PATH}:/usr/local/lib:/home/pipeline-server:${CMAKE_INSTALL_PREFIX}/lib:${CMAKE_INSTALL_PREFIX}/lib/udfs
 ENV PATH=$PATH:/home/pipeline-server/.local/bin
 
-RUN apt-get update && apt-get install libxtst6 -y --no-install-recommends && \
-    apt clean && \
-    rm -rf /var/lib/apt/lists/*
-
 USER $USER
 
 # Copy source code
@@ -221,19 +227,13 @@ COPY ./src/ ./src
 
 USER root
 
-# Cleanup
-RUN apt-get remove -y zip unzip git && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
-
-RUN pip3 install --no-cache-dir --upgrade pip && \
-    pip3 uninstall --no-cache-dir -y Flask && \
+RUN pip3 uninstall --no-cache-dir -y Flask && \
     # Downgrading Flask due to an atttribute error(JSONEncoder)
     pip3 install --no-cache-dir Flask==2.2.5 && \
     pip3 install --no-cache-dir PyYAML==5.4.1 --no-build-isolation && \
-    pip3 install --no-cache-dir -r /home/pipeline-server/src/requirements.txt && \
+    pip3 install --no-cache-dir -r src/requirements.txt && \
     pip3 install --no-cache-dir --upgrade Werkzeug==3.1.3 && \
-    pip3 install --upgrade opentelemetry-exporter-otlp
+    pip3 install --upgrade --no-cache-dir opentelemetry-exporter-otlp
 
 USER ${USER}
 
@@ -244,16 +244,10 @@ RUN opt_in_out --opt_out
 RUN mkdir -p /home/pipeline-server/models
 
 # Copy python UDFs for user_defined_pipelines/udfloader_sample pipeline
-COPY ./user_scripts/udfs/python/dummy.py /home/pipeline-server/udfs/python/dummy.py
-COPY ./user_scripts/udfs/python/add_label.py /home/pipeline-server/udfs/python/add_label.py
-COPY ./user_scripts/udfs/python/dummy_publisher.py /home/pipeline-server/udfs/python/dummy_publisher.py
-COPY ./user_scripts/udfs/python/geti_udf/ /home/pipeline-server/udfs/python/geti_udf/
+COPY ./user_scripts/udfs/python/ /home/pipeline-server/udfs/python/
 
 # Copy GVAPYTHON samples
-COPY ./user_scripts/gvapython/geti/ /home/pipeline-server/gvapython/geti
-COPY ./user_scripts/gvapython/mqtt_publisher/ /home/pipeline-server/gvapython/mqtt_publisher
-COPY ./user_scripts/gvapython/timestamp/ /home/pipeline-server/gvapython/timestamp
-COPY ./user_scripts/gvapython/gva_event_meta /home/pipeline-server/gvapython/gva_event_meta
+COPY ./user_scripts/gvapython/geti/ /home/pipeline-server/gvapython/geti/
 
 # Copy default config
 COPY ./configs/default/config.json /home/pipeline-server/config.json
