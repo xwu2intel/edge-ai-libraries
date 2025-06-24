@@ -336,14 +336,9 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 RUN \
-    mkdir -p /deb-pkg/opt/intel/ && \
-    cp -r "${DLSTREAMER_DIR}" /deb-pkg/opt/intel/dlstreamer && \
-    cp -rT "${GSTREAMER_DIR}" /deb-pkg/opt/intel/dlstreamer/gstreamer && \
-    rm -rf /deb-pkg/opt/intel/dlstreamer/archived && \
-    rm -rf /deb-pkg/opt/intel/dlstreamer/docker && \
-    rm -rf /deb-pkg/opt/intel/dlstreamer/docs && \
-    rm -rf /deb-pkg/opt/intel/dlstreamer/infrastructure && \
-    rm -rf /deb-pkg/opt/intel/dlstreamer/tests
+    mkdir -p /deb-pkg/opt/intel/dlstreamer && \
+    cp -r "${DLSTREAMER_DIR}"/python /deb-pkg/opt/intel/dlstreamer/ && \
+    cp -rT "${GSTREAMER_DIR}" /deb-pkg/opt/intel/dlstreamer/gstreamer
 
 COPY docker/ubuntu/debian /deb-pkg/debian
 
@@ -412,6 +407,8 @@ RUN export -n no_proxy NO_PROXY && \
     > /etc/apt/sources.list.d/intel-openvino-2025.list
 
 COPY --from=deb-builder /*.deb /
+
+#RUN dpkg-deb -c intel-dlstreamer_1.0.0._amd64.deb; exit 3
 
 ARG DEBIAN_FRONTEND=noninteractive
 
