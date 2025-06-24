@@ -338,7 +338,8 @@ RUN apt-get update && \
 RUN \
     mkdir -p /deb-pkg/opt/intel/dlstreamer && \
     cp -r "${DLSTREAMER_DIR}"/python /deb-pkg/opt/intel/dlstreamer/ && \
-    cp -rT "${GSTREAMER_DIR}" /deb-pkg/opt/intel/dlstreamer/gstreamer
+    cp -rT "${GSTREAMER_DIR}" /deb-pkg/opt/intel/dlstreamer/gstreamer && \
+    find /deb-pkg/opt/intel -name "*.a" -delete
 
 COPY docker/ubuntu/debian /deb-pkg/debian
 
