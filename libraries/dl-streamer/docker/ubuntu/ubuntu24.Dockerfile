@@ -60,13 +60,13 @@ RUN \
     rm -rf /var/lib/apt/lists/*
 
 # Intel GPU client drivers and prerequisites installation
-RUN \
+RUN export -n no_proxy NO_PROXY && \
     curl -fsSL https://repositories.intel.com/gpu/intel-graphics.key | \
     gpg --dearmor -o /usr/share/keyrings/intel-graphics.gpg && \
     echo "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu noble unified" |\ 
     tee /etc/apt/sources.list.d/intel-gpu-noble.list
 
-RUN \
+RUN export -n no_proxy NO_PROXY && \
     apt-get update && \
     apt-get install --allow-downgrades -y -q --no-install-recommends libze-intel-gpu1=\* libze1=\* \
     intel-media-va-driver-non-free=\* intel-gsc=\* intel-opencl-icd=25.05.32567.19-1099~24.04 && \
@@ -268,7 +268,7 @@ COPY --from=gstreamer-builder ${GSTREAMER_DIR} ${GSTREAMER_DIR}
 RUN apt-get update && apt-get install --no-install-recommends -y gnupg=\* && \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
-RUN \
+RUN export -n no_proxy NO_PROXY && \
     echo "deb https://apt.repos.intel.com/openvino/2025 ubuntu24 main" | tee /etc/apt/sources.list.d/intel-openvino-2025.list && \
     curl -sSL -O https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB && \
     apt-key add GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB && \
@@ -377,13 +377,13 @@ RUN \
 
 # As clean ubuntu image is used, we need to install GPU and NPU on this image as well
 # Intel GPU client drivers and prerequisites installation
-RUN \
+RUN export -n no_proxy NO_PROXY && \
     curl -fsSL https://repositories.intel.com/gpu/intel-graphics.key | \
     gpg --dearmor -o /usr/share/keyrings/intel-graphics.gpg && \
     echo "deb [arch=amd64 signed-by=/usr/share/keyrings/intel-graphics.gpg] https://repositories.intel.com/gpu/ubuntu noble unified" | \
     tee /etc/apt/sources.list.d/intel-gpu-noble.list
 
-RUN \
+RUN export -n no_proxy NO_PROXY && \
     apt-get update && \
     apt-get install --allow-downgrades -y -q --no-install-recommends libze-intel-gpu1=\* libze1=\* \
     intel-media-va-driver-non-free=\* intel-gsc=\* intel-opencl-icd=25.05.32567.19-1099~24.04 && \
@@ -405,7 +405,8 @@ RUN \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | \
+RUN export -n no_proxy NO_PROXY && \
+    curl -fsSL https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | \
     gpg --dearmor -o /usr/share/keyrings/intel-sw-products.gpg && \
     echo "deb [signed-by=/usr/share/keyrings/intel-sw-products.gpg] https://apt.repos.intel.com/openvino/2025 ubuntu24 main" \
     > /etc/apt/sources.list.d/intel-openvino-2025.list
@@ -414,7 +415,7 @@ COPY --from=deb-builder /*.deb /
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-RUN \
+RUN export -n no_proxy NO_PROXY && \
     apt-get update && \
     apt-get install -y -q --no-install-recommends ./*.deb && \
     apt-get clean -y && \
