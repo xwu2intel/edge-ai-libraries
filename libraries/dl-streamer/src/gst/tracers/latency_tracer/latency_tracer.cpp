@@ -641,7 +641,7 @@ static gboolean is_sink_element(GstElement *element) {
     }
     gst_iterator_free(src_iter);
 
-    // True sink: has sink pads but NO source pads (not even dynamic ones)
+    // True sink: has sink pads but NO source pads of any type
     return !has_any_src_pad;
 }
 
