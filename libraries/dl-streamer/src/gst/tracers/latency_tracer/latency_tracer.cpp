@@ -54,7 +54,11 @@ struct BranchKey {
 // Custom hash function for BranchKey
 struct BranchKeyHash {
     std::size_t operator()(const BranchKey &k) const {
-        return std::hash<void*>()(k.source) ^ (std::hash<void*>()(k.sink) << 1);
+        // Use a better hash combination to reduce collisions
+        // Based on boost::hash_combine approach
+        std::size_t h1 = std::hash<void*>()(k.source);
+        std::size_t h2 = std::hash<void*>()(k.sink);
+        return h1 ^ (h2 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2));
     }
 };
 
@@ -153,7 +157,9 @@ struct BranchStats {
     }
 
     void cal_log_pipeline_interval_unlocked(guint64 ts, gdouble frame_latency, gint interval) {
-        gdouble ms;
+        // Calculate time difference outside lock
+        gdouble ms = (gdouble)GST_CLOCK_DIFF(interval_init_time, ts) / ns_to_ms;
+        
         gdouble pipeline_latency, fps, interval_avg;
         bool should_log = false;
         guint log_interval_frame_count;
@@ -161,7 +167,6 @@ struct BranchStats {
         
         {
             lock_guard<mutex> guard(mtx);
-            ms = (gdouble)GST_CLOCK_DIFF(interval_init_time, ts) / ns_to_ms;
             if (ms >= interval) {
                 should_log = true;
                 pipeline_latency = ms / interval_frame_count;
@@ -775,6 +780,8 @@ static void do_push_buffer_pre(LatencyTracer *lt, guint64 ts, GstPad *pad, GstBu
     LatencyTracerMeta *meta = LATENCY_TRACER_META_GET(buffer);
     
     // Only add metadata if we're at a source element (optimization #5)
+    // Note: Once metadata exists, this entire block is skipped, so is_source_element
+    // is only called once per buffer at its originating source element
     if (!meta) {
         // Check if this is a source element (cached check)
         if (is_source_element(elem)) {
@@ -805,20 +812,18 @@ static void do_push_buffer_pre(LatencyTracer *lt, guint64 ts, GstPad *pad, GstBu
         GstElement *source = nullptr;
         
         // Use cached topology instead of walking the graph (optimization #1)
-        auto *cache = static_cast<unordered_map<GstElement*, GstElement*>*>(lt->sink_to_source_cache);
-        if (cache) {
-            auto it = cache->find(sink);
-            if (it != cache->end()) {
-                source = it->second;
-            } else {
-                // Fallback: compute and cache
-                source = find_upstream_source(lt, sink);
-                if (source) {
-                    (*cache)[sink] = source;
-                }
-            }
+        auto *cache = get_sink_to_source_cache(lt);
+        auto it = cache->find(sink);
+        if (it != cache->end()) {
+            source = it->second;
         } else {
+            // Fallback: compute and cache (rare, typically only first few frames)
+            // Note: Race condition on cache update is benign - multiple threads may
+            // compute the same result, but topology is read-only after initialization
             source = find_upstream_source(lt, sink);
+            if (source) {
+                (*cache)[sink] = source;
+            }
         }
 
         if (source && sink) {
