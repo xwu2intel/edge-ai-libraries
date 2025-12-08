@@ -536,17 +536,17 @@ static gboolean is_source_element(GstElement *element) {
     // Check cache first (optimization #2)
     ElementType cached = get_cached_element_type(element);
     if (cached == ELEMENT_TYPE_SOURCE) {
-        GST_TRACE("is_source_element(%s): cached=SOURCE, return TRUE", GST_ELEMENT_NAME(element));
+        GST_TRACE_OBJECT(element, "is_source_element(%s): cached=SOURCE, return TRUE", GST_ELEMENT_NAME(element));
         return TRUE;
     }
     if (cached != ELEMENT_TYPE_UNKNOWN) {
-        GST_TRACE("is_source_element(%s): cached=%d, return FALSE", GST_ELEMENT_NAME(element), cached);
+        GST_TRACE_OBJECT(element, "is_source_element(%s): cached=%d, return FALSE", GST_ELEMENT_NAME(element), cached);
         return FALSE;
     }
 
     // Method 1: Check flag (fast path for well-behaved elements)
     if (GST_OBJECT_FLAG_IS_SET(element, GST_ELEMENT_FLAG_SOURCE)) {
-        GST_DEBUG("is_source_element(%s): flag check=TRUE, caching and returning TRUE", GST_ELEMENT_NAME(element));
+        GST_DEBUG_OBJECT(element, "is_source_element(%s): flag check=TRUE, caching and returning TRUE", GST_ELEMENT_NAME(element));
         cache_element_type(element, ELEMENT_TYPE_SOURCE);
         return TRUE;
     }
@@ -609,7 +609,7 @@ static gboolean is_source_element(GstElement *element) {
     gst_iterator_free(src_iter);
 
     // Has source pads but no sink pads = source element
-    GST_DEBUG("is_source_element(%s): has_src_pad=%d, has_sink_pad=%d, result=%s", 
+    GST_DEBUG_OBJECT(element, "is_source_element(%s): has_src_pad=%d, has_sink_pad=%d, result=%s", 
              GST_ELEMENT_NAME(element), has_src_pad, has_sink_pad,
              has_src_pad ? "SOURCE" : "NOT_SOURCE");
     
@@ -627,17 +627,17 @@ static gboolean is_sink_element(GstElement *element) {
     // Check cache first (optimization #2)
     ElementType cached = get_cached_element_type(element);
     if (cached == ELEMENT_TYPE_SINK) {
-        GST_TRACE("is_sink_element(%s): cached=SINK, return TRUE", GST_ELEMENT_NAME(element));
+        GST_TRACE_OBJECT(element, "is_sink_element(%s): cached=SINK, return TRUE", GST_ELEMENT_NAME(element));
         return TRUE;
     }
     if (cached != ELEMENT_TYPE_UNKNOWN) {
-        GST_TRACE("is_sink_element(%s): cached=%d, return FALSE", GST_ELEMENT_NAME(element), cached);
+        GST_TRACE_OBJECT(element, "is_sink_element(%s): cached=%d, return FALSE", GST_ELEMENT_NAME(element), cached);
         return FALSE;
     }
 
     // Method 1: Check flag (fast path for well-behaved elements)
     if (GST_OBJECT_FLAG_IS_SET(element, GST_ELEMENT_FLAG_SINK)) {
-        GST_DEBUG("is_sink_element(%s): flag check=TRUE, caching and returning TRUE", GST_ELEMENT_NAME(element));
+        GST_DEBUG_OBJECT(element, "is_sink_element(%s): flag check=TRUE, caching and returning TRUE", GST_ELEMENT_NAME(element));
         cache_element_type(element, ELEMENT_TYPE_SINK);
         return TRUE;
     }
@@ -709,7 +709,7 @@ static gboolean is_sink_element(GstElement *element) {
     gst_iterator_free(src_iter);
 
     // Has sink pads but no always source pads = sink element
-    GST_DEBUG("is_sink_element(%s): has_sink_pad=%d, has_always_src_pad=%d, result=%s",
+    GST_DEBUG_OBJECT(element, "is_sink_element(%s): has_sink_pad=%d, has_always_src_pad=%d, result=%s",
              GST_ELEMENT_NAME(element), has_sink_pad, has_always_src_pad,
              (!has_always_src_pad) ? "SINK" : "NOT_SINK");
     
