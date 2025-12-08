@@ -20,6 +20,8 @@ static GstTracerRecord *tr_element_interval;
 static GstTracerRecord *tr_pipeline_interval;
 static guint ns_to_ms = 1000000;
 static guint ms_to_s = 1000;
+// Pre-computed constant to avoid division in hot path (multiply is faster than divide)
+static const gdouble ms_to_ns = 1.0 / 1000000.0;
 using BufferListArgs = tuple<LatencyTracer *, guint64, GstPad *>;
 #define UNUSED(x) (void)(x)
 
@@ -151,13 +153,14 @@ static void latency_tracer_class_init(LatencyTracerClass *klass) {
     GST_DEBUG_CATEGORY_INIT(latency_tracer_debug, "latency_tracer", 0, "latency tracer");
 }
 
-static GstElement *get_real_pad_parent(GstPad *pad) {
+// Inline to reduce function call overhead in hot path
+static inline GstElement *get_real_pad_parent(GstPad *pad) {
     GstObject *parent;
-    if (!pad)
+    if (G_UNLIKELY(!pad))
         return NULL;
     parent = gst_object_get_parent(GST_OBJECT_CAST(pad));
     /* if parent of pad is a ghost-pad, then pad is a proxy_pad */
-    if (parent && GST_IS_GHOST_PAD(parent)) {
+    if (G_UNLIKELY(parent && GST_IS_GHOST_PAD(parent))) {
         GstObject *tmp;
         pad = GST_PAD_CAST(parent);
         tmp = gst_object_get_parent(GST_OBJECT_CAST(pad));
@@ -173,7 +176,7 @@ struct ElementStats {
     gdouble min;
     gdouble max;
     guint frame_count;
-    gchar *name;
+    const gchar *name; // Cached element name pointer (no need to allocate/copy)
     gdouble interval_total;
     gdouble interval_min;
     gdouble interval_max;
@@ -189,7 +192,7 @@ struct ElementStats {
     }
 
     static ElementStats *from_element(GstElement *elem) {
-        if (!elem)
+        if (G_UNLIKELY(!elem))
             return nullptr;
         return static_cast<ElementStats *>(g_object_get_qdata(G_OBJECT(elem), data_string));
     }
@@ -200,6 +203,7 @@ struct ElementStats {
         min = G_MAXUINT;
         max = 0;
         frame_count = 0;
+        // Cache element name pointer - GST_ELEMENT_NAME returns const pointer, no need to copy
         name = GST_ELEMENT_NAME(elem);
         reset_interval(ts);
     }
@@ -213,17 +217,39 @@ struct ElementStats {
     }
 
     void cal_log_element_latency(guint64 src_ts, guint64 sink_ts, gint interval) {
-        lock_guard<mutex> guard(mtx);
-        frame_count += 1;
-        gdouble frame_latency = (gdouble)GST_CLOCK_DIFF(sink_ts, src_ts) / ns_to_ms;
-        total += frame_latency;
-        gdouble avg = total / frame_count;
-        if (frame_latency < min)
-            min = frame_latency;
-        if (frame_latency > max)
-            max = frame_latency;
-        gst_tracer_record_log(tr_element, name, frame_latency, avg, min, max, frame_count, is_bin);
-        cal_log_interval(frame_latency, src_ts, interval);
+        // Calculate values outside lock to minimize critical section
+        gdouble frame_latency = (gdouble)GST_CLOCK_DIFF(sink_ts, src_ts) * ms_to_ns;
+        
+        gdouble avg, current_min, current_max;
+        guint current_count;
+        gboolean current_is_bin;
+        
+        // Lock only for updating shared state
+        {
+            lock_guard<mutex> guard(mtx);
+            frame_count += 1;
+            total += frame_latency;
+            avg = total / frame_count;
+            if (frame_latency < min)
+                min = frame_latency;
+            if (frame_latency > max)
+                max = frame_latency;
+            
+            // Copy values for logging outside lock
+            current_min = min;
+            current_max = max;
+            current_count = frame_count;
+            current_is_bin = is_bin;
+        }
+        
+        // Log outside lock to reduce contention
+        gst_tracer_record_log(tr_element, name, frame_latency, avg, current_min, current_max, current_count, current_is_bin);
+        
+        // Re-acquire lock for interval calculations
+        {
+            lock_guard<mutex> guard(mtx);
+            cal_log_interval(frame_latency, src_ts, interval);
+        }
     }
 
     void cal_log_interval(gdouble frame_latency, guint64 src_ts, gint interval) {
@@ -233,8 +259,8 @@ struct ElementStats {
             interval_min = frame_latency;
         if (frame_latency > interval_max)
             interval_max = frame_latency;
-        gdouble ms = (gdouble)GST_CLOCK_DIFF(interval_init_time, src_ts) / ns_to_ms;
-        if (ms >= interval) {
+        gdouble ms = (gdouble)GST_CLOCK_DIFF(interval_init_time, src_ts) * ms_to_ns;
+        if (G_UNLIKELY(ms >= interval)) {
             gdouble interval_avg = interval_total / interval_frame_count;
             gst_tracer_record_log(tr_element_interval, name, ms, interval_avg, interval_min, interval_max);
             reset_interval(src_ts);
@@ -242,14 +268,16 @@ struct ElementStats {
     }
 };
 
-static bool is_parent_pipeline(LatencyTracer *lt, GstElement *elem) {
+// Inline to reduce function call overhead in hot path
+static inline bool is_parent_pipeline(LatencyTracer *lt, GstElement *elem) {
     GstElement *parent_elm = GST_ELEMENT_PARENT(elem);
-    if (parent_elm != lt->pipeline)
+    if (G_UNLIKELY(parent_elm != lt->pipeline))
         return false;
     return true;
 }
 
-static void reset_pipeline_interval(LatencyTracer *lt, GstClockTime now) {
+// Inline to reduce function call overhead
+static inline void reset_pipeline_interval(LatencyTracer *lt, GstClockTime now) {
     lt->interval_total = 0;
     lt->interval_min = G_MAXUINT;
     lt->interval_max = 0;
@@ -264,8 +292,8 @@ static void cal_log_pipeline_interval(LatencyTracer *lt, guint64 ts, gdouble fra
         lt->interval_min = frame_latency;
     if (frame_latency > lt->interval_max)
         lt->interval_max = frame_latency;
-    gdouble ms = (gdouble)GST_CLOCK_DIFF(lt->interval_init_time, ts) / ns_to_ms;
-    if (ms >= lt->interval) {
+    gdouble ms = (gdouble)GST_CLOCK_DIFF(lt->interval_init_time, ts) * ms_to_ns;
+    if (G_UNLIKELY(ms >= lt->interval)) {
         gdouble pipeline_latency = ms / lt->interval_frame_count;
         gdouble fps = ms_to_s / pipeline_latency;
         gdouble interval_avg = lt->interval_total / lt->interval_frame_count;
@@ -276,38 +304,55 @@ static void cal_log_pipeline_interval(LatencyTracer *lt, guint64 ts, gdouble fra
 }
 
 static void cal_log_pipeline_latency(LatencyTracer *lt, guint64 ts, LatencyTracerMeta *meta) {
+    // Calculate frame latency outside lock
+    gdouble frame_latency = (gdouble)GST_CLOCK_DIFF(meta->init_ts, ts) * ms_to_ns;
+    
+    // Lock only for updating shared state
     GST_OBJECT_LOCK(lt);
     lt->frame_count += 1;
-    gdouble frame_latency = (gdouble)GST_CLOCK_DIFF(meta->init_ts, ts) / ns_to_ms;
     gdouble pipeline_latency_ns = (gdouble)GST_CLOCK_DIFF(lt->first_frame_init_ts, ts) / lt->frame_count;
-    gdouble pipeline_latency = pipeline_latency_ns / ns_to_ms;
+    gdouble pipeline_latency = pipeline_latency_ns * ms_to_ns;
     lt->toal_latency += frame_latency;
     gdouble avg = lt->toal_latency / lt->frame_count;
-    gdouble fps = 0;
-    if (pipeline_latency > 0)
-        fps = ms_to_s / pipeline_latency;
-
+    
     if (frame_latency < lt->min)
         lt->min = frame_latency;
     if (frame_latency > lt->max)
         lt->max = frame_latency;
-
-    gst_tracer_record_log(tr_pipeline, frame_latency, avg, lt->min, lt->max, pipeline_latency, fps, lt->frame_count);
+    
+    // Copy values for logging outside lock
+    gdouble current_min = lt->min;
+    gdouble current_max = lt->max;
+    guint current_count = lt->frame_count;
+    
+    // Calculate FPS
+    gdouble fps = 0;
+    if (G_LIKELY(pipeline_latency > 0))
+        fps = ms_to_s / pipeline_latency;
+    
+    GST_OBJECT_UNLOCK(lt);
+    
+    // Log outside lock to reduce contention
+    gst_tracer_record_log(tr_pipeline, frame_latency, avg, current_min, current_max, pipeline_latency, fps, current_count);
+    
+    // Re-acquire lock for interval calculations
+    GST_OBJECT_LOCK(lt);
     cal_log_pipeline_interval(lt, ts, frame_latency);
     GST_OBJECT_UNLOCK(lt);
 }
 
 static void add_latency_meta(LatencyTracer *lt, LatencyTracerMeta *meta, guint64 ts, GstBuffer *buffer,
                              GstElement *elem) {
-    if (!gst_buffer_is_writable(buffer)) {
-        GST_ERROR_OBJECT(lt, "buffer not writable, unable to add LatencyTracerMeta at element=%s, ts=%ld, buffer=%p",
+    // Only check writable when actually adding metadata (gst_buffer_add_meta will check too)
+    meta = LATENCY_TRACER_META_ADD(buffer);
+    if (G_UNLIKELY(!meta)) {
+        GST_ERROR_OBJECT(lt, "Failed to add LatencyTracerMeta at element=%s, ts=%ld, buffer=%p",
                          GST_ELEMENT_NAME(elem), ts, buffer);
         return;
     }
-    meta = LATENCY_TRACER_META_ADD(buffer);
     meta->init_ts = ts;
     meta->last_pad_push_ts = ts;
-    if (lt->first_frame_init_ts == 0) {
+    if (G_UNLIKELY(lt->first_frame_init_ts == 0)) {
         reset_pipeline_interval(lt, ts);
         lt->first_frame_init_ts = ts;
     }
@@ -315,28 +360,36 @@ static void add_latency_meta(LatencyTracer *lt, LatencyTracerMeta *meta, guint64
 
 static void do_push_buffer_pre(LatencyTracer *lt, guint64 ts, GstPad *pad, GstBuffer *buffer) {
     GstElement *elem = get_real_pad_parent(pad);
-    if (!is_parent_pipeline(lt, elem))
+    // Early exit if not a child of the pipeline
+    if (G_UNLIKELY(!is_parent_pipeline(lt, elem)))
         return;
+    
+    // Cache metadata lookup result - expensive to call repeatedly
     LatencyTracerMeta *meta = LATENCY_TRACER_META_GET(buffer);
-    if (!meta) {
+    if (G_UNLIKELY(!meta)) {
         add_latency_meta(lt, meta, ts, buffer, elem);
         return;
     }
-    if (lt->flags & LATENCY_TRACER_FLAG_ELEMENT) {
+    
+    // Check flags and process accordingly
+    if (G_LIKELY(lt->flags & LATENCY_TRACER_FLAG_ELEMENT)) {
         ElementStats *stats = ElementStats::from_element(elem);
-        if (stats != nullptr) {
+        if (G_LIKELY(stats != nullptr)) {
             stats->cal_log_element_latency(ts, meta->last_pad_push_ts, lt->interval);
             meta->last_pad_push_ts = ts;
         }
     }
-    if (lt->flags & LATENCY_TRACER_FLAG_PIPELINE && lt->sink_element == get_real_pad_parent(GST_PAD_PEER(pad))) {
-        cal_log_pipeline_latency(lt, ts, meta);
+    
+    if (G_LIKELY(lt->flags & LATENCY_TRACER_FLAG_PIPELINE)) {
+        if (G_UNLIKELY(lt->sink_element == get_real_pad_parent(GST_PAD_PEER(pad)))) {
+            cal_log_pipeline_latency(lt, ts, meta);
+        }
     }
 }
 
 static void do_pull_range_post(LatencyTracer *lt, guint64 ts, GstPad *pad, GstBuffer *buffer) {
     GstElement *elem = get_real_pad_parent(pad);
-    if (!is_parent_pipeline(lt, elem))
+    if (G_UNLIKELY(!is_parent_pipeline(lt, elem)))
         return;
     LatencyTracerMeta *meta = nullptr;
     add_latency_meta(lt, meta, ts, buffer, elem);
@@ -357,12 +410,12 @@ static void do_push_buffer_list_pre(LatencyTracer *lt, guint64 ts, GstPad *pad, 
 static void on_element_change_state_post(LatencyTracer *lt, guint64 ts, GstElement *elem, GstStateChange change,
                                          GstStateChangeReturn result) {
     UNUSED(result);
-    if (GST_STATE_TRANSITION_NEXT(change) == GST_STATE_PLAYING && elem == lt->pipeline) {
+    if (G_UNLIKELY(GST_STATE_TRANSITION_NEXT(change) == GST_STATE_PLAYING && elem == lt->pipeline)) {
         GstIterator *iter = gst_bin_iterate_elements(GST_BIN_CAST(elem));
+        GValue gval = G_VALUE_INIT; // Initialize once outside loop
         while (true) {
-            GValue gval = {};
             auto ret = gst_iterator_next(iter, &gval);
-            if (ret != GST_ITERATOR_OK) {
+            if (G_UNLIKELY(ret != GST_ITERATOR_OK)) {
                 if (ret != GST_ITERATOR_DONE)
                     GST_ERROR_OBJECT(lt, "Got error while iterating pipeline");
                 break;
@@ -374,7 +427,11 @@ static void on_element_change_state_post(LatencyTracer *lt, guint64 ts, GstEleme
             else if (!GST_OBJECT_FLAG_IS_SET(element, GST_ELEMENT_FLAG_SOURCE)) {
                 ElementStats::create(element, ts);
             }
+            g_value_reset(&gval); // Reset instead of unset/reinit for efficiency
         }
+        g_value_unset(&gval); // Clean up after loop
+        gst_iterator_free(iter);
+        
         GstTracer *tracer = GST_TRACER(lt);
         gst_tracing_register_hook(tracer, "pad-push-pre", G_CALLBACK(do_push_buffer_pre));
         gst_tracing_register_hook(tracer, "pad-push-list-pre", G_CALLBACK(do_push_buffer_list_pre));

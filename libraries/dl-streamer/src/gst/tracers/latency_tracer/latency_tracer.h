@@ -23,6 +23,16 @@ typedef enum {
     LATENCY_TRACER_FLAG_ELEMENT = 1 << 1,
 } LatencyTracerFlags;
 
+/**
+ * LatencyTracer structure
+ * 
+ * Thread-safety model:
+ * - Pipeline-level statistics (frame_count, toal_latency, min, max, interval_*) 
+ *   are protected by GST_OBJECT_LOCK
+ * - Element-level statistics (in ElementStats) are protected by their own mutex
+ * - Metadata lookups and element name caching are thread-safe as they use 
+ *   GStreamer's built-in mechanisms
+ */
 struct LatencyTracer {
     GstTracer parent;
 
