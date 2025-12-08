@@ -859,8 +859,7 @@ static void do_pull_range_post(LatencyTracer *lt, guint64 ts, GstPad *pad, GstBu
     GstElement *elem = get_real_pad_parent(pad);
     if (!is_parent_pipeline(lt, elem))
         return;
-    LatencyTracerMeta *meta = nullptr;
-    add_latency_meta(lt, meta, ts, buffer);
+    add_latency_meta(lt, ts, buffer);
 }
 
 static void do_push_buffer_list_pre(LatencyTracer *lt, guint64 ts, GstPad *pad, GstBufferList *list) {
