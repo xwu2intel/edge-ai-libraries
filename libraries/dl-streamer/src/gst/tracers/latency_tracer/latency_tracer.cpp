@@ -1025,7 +1025,7 @@ static void on_element_new(LatencyTracer *lt, guint64 ts, GstElement *elem) {
 
 static void latency_tracer_init(LatencyTracer *lt) {
     GST_OBJECT_LOCK(lt);
-    GST_INFO("=== Latency Tracer Init START ===");
+    GST_INFO_OBJECT(lt, "=== Latency Tracer Init START ===");
     lt->pipeline = nullptr;
     lt->flags = static_cast<LatencyTracerFlags>(LATENCY_TRACER_FLAG_ELEMENT | LATENCY_TRACER_FLAG_PIPELINE);
     lt->interval = 1000;
@@ -1034,18 +1034,18 @@ static void latency_tracer_init(LatencyTracer *lt) {
     lt->sinks_list = nullptr;
     lt->sink_to_source_cache = nullptr;
     
-    GST_INFO("Default flags set to: ELEMENT=%d, PIPELINE=%d", 
+    GST_INFO_OBJECT(lt, "Default flags set to: ELEMENT=%d, PIPELINE=%d", 
              (lt->flags & LATENCY_TRACER_FLAG_ELEMENT) != 0,
              (lt->flags & LATENCY_TRACER_FLAG_PIPELINE) != 0);
-    GST_INFO("Default interval set to: %d ms", lt->interval);
+    GST_INFO_OBJECT(lt, "Default interval set to: %d ms", lt->interval);
 
     GstTracer *tracer = GST_TRACER(lt);
     gst_tracing_register_hook(tracer, "element-new", G_CALLBACK(on_element_new));
-    GST_INFO("Registered hook: element-new");
+    GST_INFO_OBJECT(lt, "Registered hook: element-new");
     gst_tracing_register_hook(tracer, "element-change-state-post", G_CALLBACK(on_element_change_state_post));
-    GST_INFO("Registered hook: element-change-state-post");
+    GST_INFO_OBJECT(lt, "Registered hook: element-change-state-post");
     GST_OBJECT_UNLOCK(lt);
-    GST_INFO("=== Latency Tracer Init DONE ===");
+    GST_INFO_OBJECT(lt, "=== Latency Tracer Init DONE ===");
 }
 
 static gboolean plugin_init(GstPlugin *plugin) {
