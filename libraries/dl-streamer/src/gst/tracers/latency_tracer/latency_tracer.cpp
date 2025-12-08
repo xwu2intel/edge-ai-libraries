@@ -132,14 +132,6 @@ struct BranchStats {
             gdouble pipeline_latency_ns = (gdouble)GST_CLOCK_DIFF(first_frame_init_ts, ts) / frame_count;
             pipeline_latency = pipeline_latency_ns / ns_to_ms;
             fps = (pipeline_latency > 0) ? (ms_to_s / pipeline_latency) : 0;
-            
-            // Update interval while still locked
-            interval_frame_count += 1;
-            interval_total += frame_latency;
-            if (frame_latency < interval_min)
-                interval_min = frame_latency;
-            if (frame_latency > interval_max)
-                interval_max = frame_latency;
         }
         // Lock released before expensive logging
         
@@ -157,33 +149,50 @@ struct BranchStats {
     }
 
     void cal_log_pipeline_interval_unlocked(guint64 ts, gdouble frame_latency, gint interval) {
-        UNUSED(frame_latency);
-        // Calculate time difference outside lock
-        gdouble ms = (gdouble)GST_CLOCK_DIFF(interval_init_time, ts) / ns_to_ms;
-        
         gdouble pipeline_latency, fps, interval_avg;
         bool should_log = false;
-        gdouble log_interval_min, log_interval_max;
+        gdouble log_interval_min, log_interval_max, log_interval_ms;
+        guint log_interval_frame_count;
         
         {
             lock_guard<mutex> guard(mtx);
-            if (ms >= interval) {
+            
+            // Update interval statistics
+            interval_frame_count += 1;
+            interval_total += frame_latency;
+            
+            if (frame_latency < interval_min)
+                interval_min = frame_latency;
+            if (frame_latency > interval_max)
+                interval_max = frame_latency;
+            
+            // Check if interval period has elapsed
+            if (GST_CLOCK_DIFF(interval_init_time, ts) >= interval * GST_MSECOND) {
                 should_log = true;
-                pipeline_latency = ms / interval_frame_count;
-                fps = ms_to_s / pipeline_latency;
+                
+                // Calculate interval statistics
                 interval_avg = interval_total / interval_frame_count;
                 log_interval_min = interval_min;
                 log_interval_max = interval_max;
+                log_interval_frame_count = interval_frame_count;
+                
+                // Calculate actual elapsed time and pipeline latency for this interval
+                log_interval_ms = (gdouble)GST_CLOCK_DIFF(interval_init_time, ts) / ns_to_ms;
+                pipeline_latency = log_interval_ms / interval_frame_count;
+                fps = (pipeline_latency > 0) ? (ms_to_s / pipeline_latency) : 0;
+                
+                // Reset interval for next period
                 reset_interval(ts);
             }
         }
         
         if (should_log) {
             GST_TRACE("[Latency Tracer Interval] Source: %s -> Sink: %s - Interval: %.2f ms, Avg: %.2f ms, Min: %.2f "
-                      "ms, Max: %.2f ms",
-                      source_name.c_str(), sink_name.c_str(), ms, interval_avg, log_interval_min, log_interval_max);
-            gst_tracer_record_log(tr_pipeline_interval, source_name.c_str(), sink_name.c_str(), ms, interval_avg,
-                                  log_interval_min, log_interval_max, pipeline_latency, fps);
+                      "ms, Max: %.2f ms, Frame Count: %u",
+                      source_name.c_str(), sink_name.c_str(), log_interval_ms, interval_avg, log_interval_min, 
+                      log_interval_max, log_interval_frame_count);
+            gst_tracer_record_log(tr_pipeline_interval, source_name.c_str(), sink_name.c_str(), log_interval_ms, 
+                                  interval_avg, log_interval_min, log_interval_max, pipeline_latency, fps);
         }
     }
 };
