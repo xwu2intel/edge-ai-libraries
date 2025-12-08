@@ -178,7 +178,7 @@ struct BranchStats {
                 
                 // Calculate actual elapsed time and pipeline latency for this interval
                 log_interval_ms = (gdouble)GST_CLOCK_DIFF(interval_init_time, ts) / ns_to_ms;
-                pipeline_latency = log_interval_ms / interval_frame_count;
+                pipeline_latency = log_interval_ms / log_interval_frame_count;
                 fps = (pipeline_latency > 0) ? (ms_to_s / pipeline_latency) : 0;
                 
                 // Reset interval for next period
