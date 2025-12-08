@@ -517,14 +517,31 @@ static bool is_parent_pipeline(LatencyTracer *lt, GstElement *elem) {
         return (cached == lt->pipeline);
     }
     
-    // Do expensive check
-    GstElement *parent_elm = GST_ELEMENT_PARENT(elem);
-    if (parent_elm != lt->pipeline)
-        return false;
+    // Walk up the parent hierarchy to find the pipeline
+    GstElement *current = elem;
+    while (current) {
+        GstElement *parent_elem = GST_ELEMENT_PARENT(current);  // Returns GstElement*
+        if (! parent_elem) {
+            break;  // Reached top without finding pipeline
+        }
+        
+        // Check if this parent is our pipeline
+        if (parent_elem == lt->pipeline) {
+            // Cache the result
+            g_object_set_data(G_OBJECT(elem), LATENCY_TRACER_PIPELINE_KEY, lt->pipeline);
+            return true;
+        }
+        
+        // If we hit a different pipeline, stop
+        if (GST_IS_PIPELINE(parent_elem) && parent_elem != lt->pipeline) {
+            break;
+        }
+        
+        // Move up to the next parent
+        current = parent_elem;
+    }
     
-    // Cache the result
-    g_object_set_data(G_OBJECT(elem), LATENCY_TRACER_PIPELINE_KEY, lt->pipeline);
-    return true;
+    return false;
 }
 
 // Helper function to determine if an element is a source
