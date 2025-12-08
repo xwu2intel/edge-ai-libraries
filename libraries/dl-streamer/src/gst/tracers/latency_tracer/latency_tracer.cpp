@@ -224,10 +224,14 @@ struct ElementStats {
         gdouble avg, current_min, current_max;
         guint current_count;
         gboolean current_is_bin;
+        bool should_log_interval = false;
+        gdouble interval_avg = 0, log_interval_min = 0, log_interval_max = 0, interval_ms = 0;
         
-        // Lock only for updating shared state
+        // Lock only once for all updates
         {
             lock_guard<mutex> guard(mtx);
+            
+            // Update frame statistics
             frame_count += 1;
             total += frame_latency;
             avg = total / frame_count;
@@ -241,30 +245,30 @@ struct ElementStats {
             current_max = max;
             current_count = frame_count;
             current_is_bin = is_bin;
+            
+            // Update interval statistics while still holding lock
+            interval_frame_count += 1;
+            interval_total += frame_latency;
+            if (frame_latency < interval_min)
+                interval_min = frame_latency;
+            if (frame_latency > interval_max)
+                interval_max = frame_latency;
+            
+            interval_ms = (gdouble)GST_CLOCK_DIFF(interval_init_time, src_ts) * ns_to_ms_multiplier;
+            if (G_UNLIKELY(interval_ms >= interval)) {
+                should_log_interval = true;
+                interval_avg = interval_total / interval_frame_count;
+                log_interval_min = interval_min;
+                log_interval_max = interval_max;
+                reset_interval(src_ts);
+            }
         }
         
         // Log outside lock to reduce contention
         gst_tracer_record_log(tr_element, name, frame_latency, avg, current_min, current_max, current_count, current_is_bin);
         
-        // Re-acquire lock for interval calculations
-        {
-            lock_guard<mutex> guard(mtx);
-            cal_log_interval(frame_latency, src_ts, interval);
-        }
-    }
-
-    void cal_log_interval(gdouble frame_latency, guint64 src_ts, gint interval) {
-        interval_frame_count += 1;
-        interval_total += frame_latency;
-        if (frame_latency < interval_min)
-            interval_min = frame_latency;
-        if (frame_latency > interval_max)
-            interval_max = frame_latency;
-        gdouble ms = (gdouble)GST_CLOCK_DIFF(interval_init_time, src_ts) * ns_to_ms_multiplier;
-        if (G_UNLIKELY(ms >= interval)) {
-            gdouble interval_avg = interval_total / interval_frame_count;
-            gst_tracer_record_log(tr_element_interval, name, ms, interval_avg, interval_min, interval_max);
-            reset_interval(src_ts);
+        if (should_log_interval) {
+            gst_tracer_record_log(tr_element_interval, name, interval_ms, interval_avg, log_interval_min, log_interval_max);
         }
     }
 };
@@ -286,35 +290,25 @@ static inline void reset_pipeline_interval(LatencyTracer *lt, GstClockTime now) 
     lt->interval_frame_count = 0;
 }
 
-static void cal_log_pipeline_interval(LatencyTracer *lt, guint64 ts, gdouble frame_latency) {
-    lt->interval_frame_count += 1;
-    lt->interval_total += frame_latency;
-    if (frame_latency < lt->interval_min)
-        lt->interval_min = frame_latency;
-    if (frame_latency > lt->interval_max)
-        lt->interval_max = frame_latency;
-    gdouble ms = (gdouble)GST_CLOCK_DIFF(lt->interval_init_time, ts) * ns_to_ms_multiplier;
-    if (G_UNLIKELY(ms >= lt->interval)) {
-        gdouble pipeline_latency = ms / lt->interval_frame_count;
-        gdouble fps = ms_to_s / pipeline_latency;
-        gdouble interval_avg = lt->interval_total / lt->interval_frame_count;
-        gst_tracer_record_log(tr_pipeline_interval, ms, interval_avg, lt->interval_min, lt->interval_max,
-                              pipeline_latency, fps);
-        reset_pipeline_interval(lt, ts);
-    }
-}
-
 static void cal_log_pipeline_latency(LatencyTracer *lt, guint64 ts, LatencyTracerMeta *meta) {
     // Calculate frame latency outside lock
     gdouble frame_latency = (gdouble)GST_CLOCK_DIFF(meta->init_ts, ts) * ns_to_ms_multiplier;
     
-    // Lock only for updating shared state
+    gdouble avg, current_min, current_max, pipeline_latency, fps;
+    guint current_count;
+    bool should_log_interval = false;
+    gdouble interval_avg = 0, log_interval_min = 0, log_interval_max = 0, interval_ms = 0;
+    gdouble pipeline_latency_interval = 0, fps_interval = 0;
+    
+    // Lock only once for all updates
     GST_OBJECT_LOCK(lt);
+    
+    // Update frame statistics
     lt->frame_count += 1;
     gdouble pipeline_latency_ns = (gdouble)GST_CLOCK_DIFF(lt->first_frame_init_ts, ts) / lt->frame_count;
-    gdouble pipeline_latency = pipeline_latency_ns * ns_to_ms_multiplier;
+    pipeline_latency = pipeline_latency_ns * ns_to_ms_multiplier;
     lt->toal_latency += frame_latency;
-    gdouble avg = lt->toal_latency / lt->frame_count;
+    avg = lt->toal_latency / lt->frame_count;
     
     if (frame_latency < lt->min)
         lt->min = frame_latency;
@@ -322,24 +316,43 @@ static void cal_log_pipeline_latency(LatencyTracer *lt, guint64 ts, LatencyTrace
         lt->max = frame_latency;
     
     // Copy values for logging outside lock
-    gdouble current_min = lt->min;
-    gdouble current_max = lt->max;
-    guint current_count = lt->frame_count;
+    current_min = lt->min;
+    current_max = lt->max;
+    current_count = lt->frame_count;
     
     // Calculate FPS
-    gdouble fps = 0;
+    fps = 0;
     if (G_LIKELY(pipeline_latency > 0))
         fps = ms_to_s / pipeline_latency;
+    
+    // Update interval statistics while still holding lock
+    lt->interval_frame_count += 1;
+    lt->interval_total += frame_latency;
+    if (frame_latency < lt->interval_min)
+        lt->interval_min = frame_latency;
+    if (frame_latency > lt->interval_max)
+        lt->interval_max = frame_latency;
+    
+    interval_ms = (gdouble)GST_CLOCK_DIFF(lt->interval_init_time, ts) * ns_to_ms_multiplier;
+    if (G_UNLIKELY(interval_ms >= lt->interval)) {
+        should_log_interval = true;
+        pipeline_latency_interval = interval_ms / lt->interval_frame_count;
+        fps_interval = ms_to_s / pipeline_latency_interval;
+        interval_avg = lt->interval_total / lt->interval_frame_count;
+        log_interval_min = lt->interval_min;
+        log_interval_max = lt->interval_max;
+        reset_pipeline_interval(lt, ts);
+    }
     
     GST_OBJECT_UNLOCK(lt);
     
     // Log outside lock to reduce contention
     gst_tracer_record_log(tr_pipeline, frame_latency, avg, current_min, current_max, pipeline_latency, fps, current_count);
     
-    // Re-acquire lock for interval calculations
-    GST_OBJECT_LOCK(lt);
-    cal_log_pipeline_interval(lt, ts, frame_latency);
-    GST_OBJECT_UNLOCK(lt);
+    if (should_log_interval) {
+        gst_tracer_record_log(tr_pipeline_interval, interval_ms, interval_avg, log_interval_min, log_interval_max,
+                              pipeline_latency_interval, fps_interval);
+    }
 }
 
 static void add_latency_meta(LatencyTracer *lt, guint64 ts, GstBuffer *buffer, GstElement *elem) {
@@ -411,7 +424,7 @@ static void on_element_change_state_post(LatencyTracer *lt, guint64 ts, GstEleme
     UNUSED(result);
     if (G_UNLIKELY(GST_STATE_TRANSITION_NEXT(change) == GST_STATE_PLAYING && elem == lt->pipeline)) {
         GstIterator *iter = gst_bin_iterate_elements(GST_BIN_CAST(elem));
-        GValue gval = {0}; // Zero-initialize for safe first use
+        GValue gval = G_VALUE_INIT; // GStreamer canonical initialization
         while (true) {
             auto ret = gst_iterator_next(iter, &gval);
             if (G_UNLIKELY(ret != GST_ITERATOR_OK)) {
