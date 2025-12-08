@@ -9,6 +9,11 @@
 #include <gst/gst.h>
 #include <gst/gsttracer.h>
 
+#ifdef __cplusplus
+#include <unordered_map>
+#include <unordered_set>
+#endif
+
 G_BEGIN_DECLS
 
 #define LATENCY_TRACER_TYPE (latency_tracer_get_type())
@@ -22,6 +27,13 @@ typedef enum {
     LATENCY_TRACER_FLAG_PIPELINE = 1 << 0,
     LATENCY_TRACER_FLAG_ELEMENT = 1 << 1,
 } LatencyTracerFlags;
+
+// Element type cache for fast lookups (Optimization #3)
+typedef enum {
+    ELEMENT_TYPE_SOURCE,    // Element with SOURCE flag set
+    ELEMENT_TYPE_SINK,      // Element with SINK flag set
+    ELEMENT_TYPE_MIDDLE,    // Element that is neither source nor sink
+} ElementType;
 
 struct LatencyTracer {
     GstTracer parent;
@@ -41,6 +53,18 @@ struct LatencyTracer {
     gint interval;
     GstClockTime first_frame_init_ts;
     LatencyTracerFlags flags;
+
+#ifdef __cplusplus
+    // Optimization #3: Cache element types for O(1) lookups instead of repeated flag checks
+    std::unordered_map<GstElement*, ElementType> *element_type_cache;
+    
+    // Optimization #1: Cache pipeline topology (source-to-sink mappings) for O(1) lookups
+    // Note: Currently not implemented as the existing code doesn't do complex topology traversals
+    // This cache is reserved for future topology-based optimizations
+    
+    // Optimization #5: Track source elements for metadata addition optimization
+    std::unordered_set<GstElement*> *source_elements;
+#endif
 };
 
 struct LatencyTracerClass {
