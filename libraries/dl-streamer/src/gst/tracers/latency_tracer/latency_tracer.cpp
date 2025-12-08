@@ -163,7 +163,6 @@ struct BranchStats {
         
         gdouble pipeline_latency, fps, interval_avg;
         bool should_log = false;
-        guint log_interval_frame_count;
         gdouble log_interval_min, log_interval_max;
         
         {
@@ -173,7 +172,6 @@ struct BranchStats {
                 pipeline_latency = ms / interval_frame_count;
                 fps = ms_to_s / pipeline_latency;
                 interval_avg = interval_total / interval_frame_count;
-                log_interval_frame_count = interval_frame_count;
                 log_interval_min = interval_min;
                 log_interval_max = interval_max;
                 reset_interval(ts);
