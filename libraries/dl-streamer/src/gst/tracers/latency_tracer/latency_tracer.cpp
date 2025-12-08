@@ -229,11 +229,19 @@ static unordered_map<GstElement*, GstElement*> *get_sink_to_source_cache(Latency
 
 static void latency_tracer_constructed(GObject *object) {
     LatencyTracer *lt = LATENCY_TRACER(object);
+    GST_INFO_OBJECT(lt, "=== Latency Tracer Constructed START ===");
+    
     gchar *params, *tmp;
     GstStructure *params_struct = NULL;
     g_object_get(lt, "params", &params, NULL);
-    if (!params)
+    
+    GST_INFO_OBJECT(lt, "Got params: %s", params ? params : "NULL");
+    
+    if (!params) {
+        GST_INFO_OBJECT(lt, "No params provided, using defaults");
+        GST_INFO_OBJECT(lt, "=== Latency Tracer Constructed DONE ===");
         return;
+    }
 
     tmp = g_strdup_printf("latency_tracer,%s", params);
     params_struct = gst_structure_from_string(tmp, NULL);
@@ -243,10 +251,13 @@ static void latency_tracer_constructed(GObject *object) {
         const gchar *flags;
         /* Read the flags if available */
         flags = gst_structure_get_string(params_struct, "flags");
+        GST_INFO_OBJECT(lt, "Flags string from params: %s", flags ? flags : "NULL");
+        
         if (flags) {
             lt->flags = static_cast<LatencyTracerFlags>(0);
             GStrv split = g_strsplit(flags, "+", -1);
             for (gint i = 0; split[i]; i++) {
+                GST_INFO_OBJECT(lt, "Processing flag: %s", split[i]);
                 if (g_str_equal(split[i], "pipeline"))
                     lt->flags = static_cast<LatencyTracerFlags>(lt->flags | LATENCY_TRACER_FLAG_PIPELINE);
                 else if (g_str_equal(split[i], "element"))
@@ -256,11 +267,16 @@ static void latency_tracer_constructed(GObject *object) {
             }
             g_strfreev(split);
         }
+        
         gst_structure_get_int(params_struct, "interval", &lt->interval);
-        GST_INFO_OBJECT(lt, "interval set to %d ms", lt->interval);
+        GST_INFO_OBJECT(lt, "Final interval set to %d ms", lt->interval);
+        GST_INFO_OBJECT(lt, "Final flags: ELEMENT=%d, PIPELINE=%d",
+                       (lt->flags & LATENCY_TRACER_FLAG_ELEMENT) != 0,
+                       (lt->flags & LATENCY_TRACER_FLAG_PIPELINE) != 0);
         gst_structure_free(params_struct);
     }
     g_free(params);
+    GST_INFO_OBJECT(lt, "=== Latency Tracer Constructed DONE ===");
 }
 
 static void latency_tracer_finalize(GObject *object) {
@@ -519,11 +535,18 @@ static gboolean is_source_element(GstElement *element) {
 
     // Check cache first (optimization #2)
     ElementType cached = get_cached_element_type(element);
-    if (cached == ELEMENT_TYPE_SOURCE) return TRUE;
-    if (cached != ELEMENT_TYPE_UNKNOWN) return FALSE;
+    if (cached == ELEMENT_TYPE_SOURCE) {
+        GST_TRACE_OBJECT(element, "is_source_element(%s): cached=SOURCE, return TRUE", GST_ELEMENT_NAME(element));
+        return TRUE;
+    }
+    if (cached != ELEMENT_TYPE_UNKNOWN) {
+        GST_TRACE_OBJECT(element, "is_source_element(%s): cached=%d, return FALSE", GST_ELEMENT_NAME(element), cached);
+        return FALSE;
+    }
 
     // Method 1: Check flag (fast path for well-behaved elements)
     if (GST_OBJECT_FLAG_IS_SET(element, GST_ELEMENT_FLAG_SOURCE)) {
+        GST_DEBUG_OBJECT(element, "is_source_element(%s): flag check=TRUE, caching and returning TRUE", GST_ELEMENT_NAME(element));
         cache_element_type(element, ELEMENT_TYPE_SOURCE);
         return TRUE;
     }
@@ -586,6 +609,10 @@ static gboolean is_source_element(GstElement *element) {
     gst_iterator_free(src_iter);
 
     // Has source pads but no sink pads = source element
+    GST_DEBUG_OBJECT(element, "is_source_element(%s): has_src_pad=%d, has_sink_pad=%d, result=%s", 
+             GST_ELEMENT_NAME(element), has_src_pad, has_sink_pad,
+             has_src_pad ? "SOURCE" : "NOT_SOURCE");
+    
     ElementType type = has_src_pad ? ELEMENT_TYPE_SOURCE : ELEMENT_TYPE_FILTER;
     cache_element_type(element, type);
     return has_src_pad;
@@ -599,11 +626,18 @@ static gboolean is_sink_element(GstElement *element) {
 
     // Check cache first (optimization #2)
     ElementType cached = get_cached_element_type(element);
-    if (cached == ELEMENT_TYPE_SINK) return TRUE;
-    if (cached != ELEMENT_TYPE_UNKNOWN) return FALSE;
+    if (cached == ELEMENT_TYPE_SINK) {
+        GST_TRACE_OBJECT(element, "is_sink_element(%s): cached=SINK, return TRUE", GST_ELEMENT_NAME(element));
+        return TRUE;
+    }
+    if (cached != ELEMENT_TYPE_UNKNOWN) {
+        GST_TRACE_OBJECT(element, "is_sink_element(%s): cached=%d, return FALSE", GST_ELEMENT_NAME(element), cached);
+        return FALSE;
+    }
 
     // Method 1: Check flag (fast path for well-behaved elements)
     if (GST_OBJECT_FLAG_IS_SET(element, GST_ELEMENT_FLAG_SINK)) {
+        GST_DEBUG_OBJECT(element, "is_sink_element(%s): flag check=TRUE, caching and returning TRUE", GST_ELEMENT_NAME(element));
         cache_element_type(element, ELEMENT_TYPE_SINK);
         return TRUE;
     }
@@ -675,6 +709,10 @@ static gboolean is_sink_element(GstElement *element) {
     gst_iterator_free(src_iter);
 
     // Has sink pads but no always source pads = sink element
+    GST_DEBUG_OBJECT(element, "is_sink_element(%s): has_sink_pad=%d, has_always_src_pad=%d, result=%s",
+             GST_ELEMENT_NAME(element), has_sink_pad, has_always_src_pad,
+             (!has_always_src_pad) ? "SINK" : "NOT_SINK");
+    
     ElementType type = (!has_always_src_pad) ? ELEMENT_TYPE_SINK : ELEMENT_TYPE_FILTER;
     cache_element_type(element, type);
     return !has_always_src_pad;
@@ -781,9 +819,18 @@ static void add_latency_meta(LatencyTracer *lt, LatencyTracerMeta *meta, guint64
 }
 
 static void do_push_buffer_pre(LatencyTracer *lt, guint64 ts, GstPad *pad, GstBuffer *buffer) {
+    static gboolean first_call = TRUE;
+    if (first_call) {
+        GST_INFO_OBJECT(lt, "=== First do_push_buffer_pre call ===");
+        first_call = FALSE;
+    }
+    
     GstElement *elem = get_real_pad_parent(pad);
     if (!is_parent_pipeline(lt, elem))
         return;
+    
+    GST_TRACE_OBJECT(lt, "do_push_buffer_pre: elem=%s, buffer=%p", 
+                    elem ? GST_ELEMENT_NAME(elem) : "NULL", buffer);
     
     LatencyTracerMeta *meta = LATENCY_TRACER_META_GET(buffer);
     
@@ -793,6 +840,7 @@ static void do_push_buffer_pre(LatencyTracer *lt, guint64 ts, GstPad *pad, GstBu
     if (!meta) {
         // Check if this is a source element (cached check)
         if (is_source_element(elem)) {
+            GST_DEBUG_OBJECT(lt, "Adding metadata at source: %s", GST_ELEMENT_NAME(elem));
             add_latency_meta(lt, meta, ts, buffer);
             // Refresh meta pointer after adding
             meta = LATENCY_TRACER_META_GET(buffer);
@@ -881,64 +929,103 @@ static void do_push_buffer_list_pre(LatencyTracer *lt, guint64 ts, GstPad *pad, 
 static void on_element_change_state_post(LatencyTracer *lt, guint64 ts, GstElement *elem, GstStateChange change,
                                          GstStateChangeReturn result) {
     UNUSED(result);
+    
+    GST_DEBUG_OBJECT(lt, "on_element_change_state_post: elem=%s, change=%d->%d, target=%d",
+                    elem ? GST_ELEMENT_NAME(elem) : "NULL",
+                    GST_STATE_TRANSITION_CURRENT(change),
+                    GST_STATE_TRANSITION_NEXT(change),
+                    GST_STATE_PLAYING);
+    
+    GST_DEBUG_OBJECT(lt, "Pipeline check: elem=%p, lt->pipeline=%p, equal=%d",
+                    elem, lt->pipeline, elem == lt->pipeline);
+    
     if (GST_STATE_TRANSITION_NEXT(change) == GST_STATE_PLAYING && elem == lt->pipeline) {
+        GST_INFO_OBJECT(lt, "=== Pipeline transitioning to PLAYING, discovering elements ===");
+        
         auto *sources = get_sources_list(lt);
         auto *sinks = get_sinks_list(lt);
+        
+        GST_INFO_OBJECT(lt, "Starting element iteration...");
 
         GstIterator *iter = gst_bin_iterate_elements(GST_BIN_CAST(elem));
+        int element_count = 0;
+        
         while (true) {
             GValue gval = {};
             auto ret = gst_iterator_next(iter, &gval);
             if (ret != GST_ITERATOR_OK) {
-                if (ret != GST_ITERATOR_DONE)
-                    GST_ERROR_OBJECT(lt, "Got error while iterating pipeline");
+                if (ret != GST_ITERATOR_DONE) {
+                    GST_ERROR_OBJECT(lt, "Got error while iterating pipeline: %d", ret);
+                } else {
+                    GST_INFO_OBJECT(lt, "Iterator done, processed %d elements", element_count);
+                }
                 break;
             }
+            
             auto *element = static_cast<GstElement *>(g_value_get_object(&gval));
-            GST_INFO_OBJECT(lt, "Element %s ", GST_ELEMENT_NAME(element));
+            element_count++;
+            GST_INFO_OBJECT(lt, "Element %d: %s", element_count, GST_ELEMENT_NAME(element));
 
-            if (is_sink_element(element)) {
+            gboolean is_sink = is_sink_element(element);
+            gboolean is_source = is_source_element(element);
+            
+            GST_INFO_OBJECT(lt, "  is_sink=%d, is_source=%d", is_sink, is_source);
+
+            if (is_sink) {
                 // Track all sink elements
                 sinks->push_back(element);
-                GST_INFO_OBJECT(lt, "Found sink element: %s", GST_ELEMENT_NAME(element));
-            } else if (is_source_element(element)) {
+                GST_INFO_OBJECT(lt, "  -> Added to sinks list");
+            } else if (is_source) {
                 // Track all source elements
                 sources->push_back(element);
-                GST_INFO_OBJECT(lt, "Found source element: %s", GST_ELEMENT_NAME(element));
+                GST_INFO_OBJECT(lt, "  -> Added to sources list");
             } else {
                 // create ElementStats only once per each element (for non-source, non-sink elements)
                 if (!ElementStats::from_element(element)) {
                     ElementStats::create(element, ts);
+                    GST_INFO_OBJECT(lt, "  -> Created ElementStats");
                 }
             }
             g_value_unset(&gval);
         }
         gst_iterator_free(iter);
 
-        GST_INFO_OBJECT(lt, "Found %zu source(s) and %zu sink(s)", sources->size(), sinks->size());
+        GST_INFO_OBJECT(lt, "=== Element discovery complete: %zu source(s) and %zu sink(s) ===", 
+                       sources->size(), sinks->size());
 
         // Cache pipeline topology after discovering all elements (optimization #1)
+        GST_INFO_OBJECT(lt, "Caching pipeline topology...");
         cache_pipeline_topology(lt);
+        GST_INFO_OBJECT(lt, "Topology cached");
 
+        GST_INFO_OBJECT(lt, "Registering pad hooks...");
         GstTracer *tracer = GST_TRACER(lt);
         gst_tracing_register_hook(tracer, "pad-push-pre", G_CALLBACK(do_push_buffer_pre));
         gst_tracing_register_hook(tracer, "pad-push-list-pre", G_CALLBACK(do_push_buffer_list_pre));
         gst_tracing_register_hook(tracer, "pad-pull-range-post", G_CALLBACK(do_pull_range_post));
+        GST_INFO_OBJECT(lt, "Pad hooks registered");
     }
 }
 static void on_element_new(LatencyTracer *lt, guint64 ts, GstElement *elem) {
     UNUSED(ts);
+    GST_DEBUG_OBJECT(lt, "on_element_new called for: %s (is_pipeline=%d)", 
+                    elem ? GST_ELEMENT_NAME(elem) : "NULL",
+                    elem ? GST_IS_PIPELINE(elem) : 0);
+    
     if (GST_IS_PIPELINE(elem)) {
-        if (!lt->pipeline)
+        if (!lt->pipeline) {
             lt->pipeline = elem;
-        else
+            GST_INFO_OBJECT(lt, "Captured pipeline: %s", GST_ELEMENT_NAME(elem));
+        } else {
             GST_WARNING_OBJECT(lt, "pipeline %s already exists, multiple pipelines may not give right result %s",
                                GST_ELEMENT_NAME(lt->pipeline), GST_ELEMENT_NAME(elem));
+        }
     }
 }
 
 static void latency_tracer_init(LatencyTracer *lt) {
     GST_OBJECT_LOCK(lt);
+    GST_INFO_OBJECT(lt, "=== Latency Tracer Init START ===");
     lt->pipeline = nullptr;
     lt->flags = static_cast<LatencyTracerFlags>(LATENCY_TRACER_FLAG_ELEMENT | LATENCY_TRACER_FLAG_PIPELINE);
     lt->interval = 1000;
@@ -946,11 +1033,19 @@ static void latency_tracer_init(LatencyTracer *lt) {
     lt->sources_list = nullptr;
     lt->sinks_list = nullptr;
     lt->sink_to_source_cache = nullptr;
+    
+    GST_INFO_OBJECT(lt, "Default flags set to: ELEMENT=%d, PIPELINE=%d", 
+             (lt->flags & LATENCY_TRACER_FLAG_ELEMENT) != 0,
+             (lt->flags & LATENCY_TRACER_FLAG_PIPELINE) != 0);
+    GST_INFO_OBJECT(lt, "Default interval set to: %d ms", lt->interval);
 
     GstTracer *tracer = GST_TRACER(lt);
     gst_tracing_register_hook(tracer, "element-new", G_CALLBACK(on_element_new));
+    GST_INFO_OBJECT(lt, "Registered hook: element-new");
     gst_tracing_register_hook(tracer, "element-change-state-post", G_CALLBACK(on_element_change_state_post));
+    GST_INFO_OBJECT(lt, "Registered hook: element-change-state-post");
     GST_OBJECT_UNLOCK(lt);
+    GST_INFO_OBJECT(lt, "=== Latency Tracer Init DONE ===");
 }
 
 static gboolean plugin_init(GstPlugin *plugin) {
