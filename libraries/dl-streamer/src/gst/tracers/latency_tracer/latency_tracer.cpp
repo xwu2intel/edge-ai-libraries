@@ -740,7 +740,7 @@ static GstElement *find_upstream_source(LatencyTracer *lt, GstElement *elem) {
 // Cache pipeline topology after it reaches PLAYING state (optimization #1)
 static void cache_pipeline_topology(LatencyTracer *lt) {
     auto *cache = get_sink_to_source_cache(lt);
-    auto *sinks = static_cast<vector<GstElement*>*>(lt->sinks_list);
+    auto *sinks = get_sinks_list(lt);
     
     if (!sinks) return;
     
@@ -806,14 +806,19 @@ static void do_push_buffer_pre(LatencyTracer *lt, guint64 ts, GstPad *pad, GstBu
         
         // Use cached topology instead of walking the graph (optimization #1)
         auto *cache = static_cast<unordered_map<GstElement*, GstElement*>*>(lt->sink_to_source_cache);
-        if (cache && cache->find(sink) != cache->end()) {
-            source = (*cache)[sink];
-        } else {
-            // Fallback: compute and cache
-            source = find_upstream_source(lt, sink);
-            if (source && cache) {
-                (*cache)[sink] = source;
+        if (cache) {
+            auto it = cache->find(sink);
+            if (it != cache->end()) {
+                source = it->second;
+            } else {
+                // Fallback: compute and cache
+                source = find_upstream_source(lt, sink);
+                if (source) {
+                    (*cache)[sink] = source;
+                }
             }
+        } else {
+            source = find_upstream_source(lt, sink);
         }
 
         if (source && sink) {
