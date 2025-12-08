@@ -25,12 +25,16 @@ struct BranchKey {
 
 struct BranchKeyHash {
     std::size_t operator()(const BranchKey &k) const {
-        return std::hash<void*>()(k.source) ^ (std::hash<void*>()(k.sink) << 1);
+        // Use robust hash combination to reduce collisions
+        // Based on boost::hash_combine approach
+        std::size_t h1 = std::hash<void*>()(k.source);
+        std::size_t h2 = std::hash<void*>()(k.sink);
+        return h1 ^ (h2 + 0x9e3779b9 + (h1 << 6) + (h1 >> 2));
     }
 };
 ```
 
-**Impact:** Eliminates all string operations in hot path. Pointer comparison and hashing is orders of magnitude faster than string operations.
+**Impact:** Eliminates all string operations in hot path. Pointer comparison and hashing is orders of magnitude faster than string operations. The hash function uses a robust combination technique similar to boost::hash_combine to minimize collision probability.
 
 **Files Modified:**
 - `latency_tracer.cpp`: Lines 36-48 (struct definitions)
