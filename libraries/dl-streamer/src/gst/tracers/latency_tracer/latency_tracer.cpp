@@ -582,9 +582,10 @@ static gboolean is_sink_element(GstElement *element) {
     }
 
     // Method 2: Check pad topology (definitive test)
-    // A sink element MUST have sink pads but NO source pads (or only request/sometimes pads)
+    // A TRUE sink element MUST have sink pads but NO source pads AT ALL
+    // (not even "sometimes" or "request" pads)
     gboolean has_sink_pad = FALSE;
-    gboolean has_always_src_pad = FALSE;
+    gboolean has_any_src_pad = FALSE;
 
     // Check for sink pads
     GstIterator *sink_iter = gst_element_iterate_sink_pads(element);
@@ -614,29 +615,23 @@ static gboolean is_sink_element(GstElement *element) {
         return FALSE;
     }
 
-    // Check for source pads (only count "always" pads, not request/sometimes)
+    // Check for ANY source pads (always, sometimes, or request)
+    // TRUE sinks like fakesink/autovideosink have NO source pads at all
     GstIterator *src_iter = gst_element_iterate_src_pads(element);
     GValue src_val = G_VALUE_INIT;
     done = FALSE;
     while (!done) {
         switch (gst_iterator_next(src_iter, &src_val)) {
         case GST_ITERATOR_OK: {
-            GstPad *pad = GST_PAD(g_value_get_object(&src_val));
-            GstPadTemplate *templ = gst_pad_get_pad_template(pad);
-
-            // Only count "always" source pads
-            if (templ && GST_PAD_TEMPLATE_PRESENCE(templ) == GST_PAD_ALWAYS) {
-                has_always_src_pad = TRUE;
-                g_value_unset(&src_val);
-                done = TRUE;
-                break;
-            }
+            // Found ANY source pad - this is NOT a true sink
+            has_any_src_pad = TRUE;
             g_value_unset(&src_val);
+            done = TRUE;
             break;
         }
         case GST_ITERATOR_RESYNC:
             gst_iterator_resync(src_iter);
-            has_always_src_pad = FALSE;
+            has_any_src_pad = FALSE;
             break;
         case GST_ITERATOR_ERROR:
         case GST_ITERATOR_DONE:
@@ -646,8 +641,8 @@ static gboolean is_sink_element(GstElement *element) {
     }
     gst_iterator_free(src_iter);
 
-    // Has sink pads but no always source pads = sink element
-    return !has_always_src_pad;
+    // True sink: has sink pads but NO source pads (not even dynamic ones)
+    return !has_any_src_pad;
 }
 
 // Recursively walk upstream from an element to find a tracked source
