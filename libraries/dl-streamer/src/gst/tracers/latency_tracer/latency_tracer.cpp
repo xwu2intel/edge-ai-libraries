@@ -759,9 +759,8 @@ static void cache_pipeline_topology(LatencyTracer *lt) {
     }
 }
 
-static void add_latency_meta(LatencyTracer *lt, LatencyTracerMeta *meta, guint64 ts, GstBuffer *buffer) {
+static void add_latency_meta(LatencyTracer *lt, guint64 ts, GstBuffer *buffer) {
     UNUSED(lt);
-    UNUSED(meta);  // meta parameter is not actually used
     
     if (!buffer) {
         return;
@@ -791,7 +790,7 @@ static void do_push_buffer_pre(LatencyTracer *lt, guint64 ts, GstPad *pad, GstBu
     if (!meta) {
         // Check if this is a source element (cached check)
         if (is_source_element(elem)) {
-            add_latency_meta(lt, nullptr, ts, buffer);  // meta param not used
+            add_latency_meta(lt, ts, buffer);
             // Refresh meta pointer after adding
             meta = LATENCY_TRACER_META_GET(buffer);
         }
