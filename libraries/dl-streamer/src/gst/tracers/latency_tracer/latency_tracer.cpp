@@ -118,8 +118,8 @@ struct BranchStats {
             frame_count += 1;
             current_frame_count = frame_count;
             
-            total += frame_latency;
-            current_avg = total / frame_count;
+            toal_latency += frame_latency;
+            current_avg = toal_latency / frame_count;
             
             if (frame_latency < min)
                 min = frame_latency;
@@ -157,6 +157,7 @@ struct BranchStats {
     }
 
     void cal_log_pipeline_interval_unlocked(guint64 ts, gdouble frame_latency, gint interval) {
+        UNUSED(frame_latency);
         // Calculate time difference outside lock
         gdouble ms = (gdouble)GST_CLOCK_DIFF(interval_init_time, ts) / ns_to_ms;
         
