@@ -761,14 +761,21 @@ static void cache_pipeline_topology(LatencyTracer *lt) {
 
 static void add_latency_meta(LatencyTracer *lt, LatencyTracerMeta *meta, guint64 ts, GstBuffer *buffer) {
     UNUSED(lt);
-    if (!gst_buffer_is_writable(buffer)) {
-        // Skip non-writable buffers - expected for shared/read-only buffers
-        GST_TRACE("Skipping non-writable buffer for latency metadata");
+    UNUSED(meta);  // meta parameter is not actually used
+    
+    if (!buffer) {
         return;
     }
-    meta = LATENCY_TRACER_META_ADD(buffer);
-    meta->init_ts = ts;
-    meta->last_pad_push_ts = ts;
+    
+    // Try to add metadata - the API will handle making buffer writable if needed
+    LatencyTracerMeta *new_meta = LATENCY_TRACER_META_ADD(buffer);
+    if (!new_meta) {
+        // Could not add metadata (buffer might be read-only or other issue)
+        return;
+    }
+    
+    new_meta->init_ts = ts;
+    new_meta->last_pad_push_ts = ts;
 }
 
 static void do_push_buffer_pre(LatencyTracer *lt, guint64 ts, GstPad *pad, GstBuffer *buffer) {
@@ -784,7 +791,7 @@ static void do_push_buffer_pre(LatencyTracer *lt, guint64 ts, GstPad *pad, GstBu
     if (!meta) {
         // Check if this is a source element (cached check)
         if (is_source_element(elem)) {
-            add_latency_meta(lt, meta, ts, buffer);
+            add_latency_meta(lt, nullptr, ts, buffer);  // meta param not used
             // Refresh meta pointer after adding
             meta = LATENCY_TRACER_META_GET(buffer);
         }
