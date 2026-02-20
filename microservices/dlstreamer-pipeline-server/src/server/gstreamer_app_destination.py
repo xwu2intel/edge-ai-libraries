@@ -4,14 +4,43 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 
-from collections import namedtuple
 from enum import Enum, auto
 from gstgva.video_frame import VideoFrame
 from src.server.app_destination import AppDestination
 from src.server.gstreamer_pipeline import GStreamerPipeline
 
-GvaSample = namedtuple('GvaSample', ['sample', 'video_frame'])
-GvaSample.__new__.__defaults__ = (None, None)
+_UNSET = object()  # Sentinel: VideoFrame not yet constructed
+
+
+class GvaSample:
+    """Container for a GStreamer sample with lazy VideoFrame construction.
+
+    VideoFrame is only created on first access of the ``video_frame``
+    attribute, keeping the GStreamer mainloop callback non-blocking.
+    """
+
+    __slots__ = ['sample', '_video_frame', '_video_frame_created']
+
+    def __init__(self, sample, video_frame=_UNSET):
+        self.sample = sample
+        if video_frame is _UNSET:
+            self._video_frame = None
+            self._video_frame_created = False
+        else:
+            self._video_frame = video_frame
+            self._video_frame_created = True
+
+    @property
+    def video_frame(self):
+        if not self._video_frame_created:
+            try:
+                self._video_frame = VideoFrame(self.sample.get_buffer(),
+                                               caps=self.sample.get_caps())
+            except Exception:
+                self._video_frame = None
+            self._video_frame_created = True
+        return self._video_frame
+
 
 class GStreamerAppDestination(AppDestination):
 
@@ -36,14 +65,15 @@ class GStreamerAppDestination(AppDestination):
 
     def _create_output_item(self, sample):
 
+        if (self._mode == GStreamerAppDestination.Mode.FRAMES):
+            return GvaSample(sample)
+
         try:
             video_frame = VideoFrame(sample.get_buffer(),
                                      caps=sample.get_caps())
         except Exception:
             video_frame = None
 
-        if (self._mode == GStreamerAppDestination.Mode.FRAMES):
-            return GvaSample(sample, video_frame)
         if (self._mode == GStreamerAppDestination.Mode.REGIONS):
             regions = []
             if (video_frame):
