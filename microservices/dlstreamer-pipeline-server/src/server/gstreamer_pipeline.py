@@ -56,6 +56,7 @@ class GStreamerPipeline(Pipeline):
     _mainloop_thread = None
     _rtsp_server = None
     _webrtc_manager = None
+    MAX_LATENCY_ENTRIES = 1000
     CachedElement = namedtuple("CachedElement", ["element", "pipelines"])
 
     @staticmethod
@@ -84,7 +85,7 @@ class GStreamerPipeline(Pipeline):
         self._avg_fps = 0
         self._frame_fps = 0
         self._last_frame_count = 0
-        self._last_frame_time = 0
+        self._last_frame_time = time.monotonic()
         self._gst_launch_string = None
         self.latency_times = dict()
         self.sum_pipeline_latency = 0
@@ -110,7 +111,13 @@ class GStreamerPipeline(Pipeline):
         self._options = options
         self._connection_retries = 0
         self._current_retry_delay = 1000  # 1000ms initial delay
-
+        self._pipeline_context = GLib.MainContext.new()
+        self._pipeline_mainloop = GLib.MainLoop.new(self._pipeline_context, False)
+        self._pipeline_mainloop_thread = Thread(
+            target=self._run_pipeline_mainloop,
+            name="pipeline-{}-mainloop".format(identifier))
+        self._pipeline_mainloop_thread.daemon = True
+        self._pipeline_mainloop_thread.start()
 
         if (not GStreamerPipeline._mainloop):
             GStreamerPipeline._mainloop_thread = Thread(
@@ -125,6 +132,16 @@ class GStreamerPipeline(Pipeline):
                 GStreamerPipeline._webrtc_manager = GStreamerWebRTCManager(options.webrtc_signaling_server)
         self.rtsp_server = GStreamerPipeline._rtsp_server
         self.webrtc_manager = GStreamerPipeline._webrtc_manager
+
+    def _run_pipeline_mainloop(self):
+        """Run this pipeline's dedicated GLib MainLoop for independent event processing."""
+        self._pipeline_context.push_thread_default()
+        try:
+            self._pipeline_mainloop.run()
+        except (KeyboardInterrupt, SystemExit):
+            pass
+        finally:
+            self._pipeline_context.pop_thread_default()
 
     @staticmethod
     def mainloop_quit():
@@ -182,6 +199,7 @@ class GStreamerPipeline(Pipeline):
             self._app_destinations.append(webrtc_app_destination)
 
     def _delete_pipeline(self, new_state):
+        self._cal_avg_fps()
         self.state = new_state
         self.stop_time = time.time()
         self._logger.debug("Setting Pipeline {id}"
@@ -221,6 +239,12 @@ class GStreamerPipeline(Pipeline):
                     if (self != pipeline):
                         pipeline.stop()
                 del GStreamerPipeline._inference_element_cache[key]
+
+        if self._pipeline_mainloop:
+            self._pipeline_mainloop.quit()
+            self._pipeline_mainloop = None
+        if self._pipeline_mainloop_thread:
+            self._pipeline_mainloop_thread = None
 
         self._finished_callback()
 
@@ -291,6 +315,7 @@ class GStreamerPipeline(Pipeline):
         return status_obj
 
     def get_avg_fps(self):
+        self._cal_avg_fps()
         return self._avg_fps
 
     def _get_element_property(self, element, key):
@@ -597,7 +622,9 @@ class GStreamerPipeline(Pipeline):
                 self._set_source_and_sink()
 
                 bus = self.pipeline.get_bus()
+                self._pipeline_context.push_thread_default()
                 bus.add_signal_watch()
+                self._pipeline_context.pop_thread_default()
                 self._bus_connection_id = bus.connect("message", self.bus_call)
                 splitmuxsink = self.pipeline.get_by_name("splitmuxsink")
                 self._real_base = None
@@ -729,7 +756,7 @@ class GStreamerPipeline(Pipeline):
                     self.request["source"]["class"]))
 
             self.appsrc_element.set_property("format", Gst.Format.TIME)
-            self.appsrc_element.set_property("block", True)
+            self.appsrc_element.set_property("block", False)
             self.appsrc_element.set_property("do-timestamp", True)
             self.appsrc_element.set_property("is-live", True)
             self.appsrc_element.set_property("emit-signals", True)
@@ -746,6 +773,9 @@ class GStreamerPipeline(Pipeline):
     def source_probe_callback(unused_pad, info, self):
         buffer = info.get_buffer()
         pts = buffer.pts
+        if len(self.latency_times) >= self.MAX_LATENCY_ENTRIES:
+            oldest = next(iter(self.latency_times))
+            del self.latency_times[oldest]
         self.latency_times[pts] = time.time()
         return Gst.PadProbeReturn.OK
 
@@ -766,22 +796,27 @@ class GStreamerPipeline(Pipeline):
 
     def _save_start_time(self):
         self.start_time = time.time()
-        self._last_frame_time = self.start_time
+        self._last_frame_time = time.monotonic()
         self._last_frame_count = 0
         self.frame_count = 0
+
+    def _cal_avg_fps(self):
+        if self.start_time is None or self.state is None or self.state.stopped():
+            self._avg_fps = 0
+            return
+        current_time = time.time()
+        if current_time > self.start_time:
+            self._avg_fps = self.frame_count / (current_time - self.start_time)
 
     def _increment_frame_count(self):
         self.frame_count += 1
 
-        current_time = time.time()
-        if current_time > self.start_time:
-          self._avg_fps = self.frame_count / (current_time - self.start_time)
-
+        current_time = time.monotonic()
         delta_time = current_time - self._last_frame_time
         if delta_time >= 1:
-          self._frame_fps = (self.frame_count - self._last_frame_count) / delta_time
-          self._last_frame_count = self.frame_count
-          self._last_frame_time = current_time
+            self._frame_fps = (self.frame_count - self._last_frame_count) / delta_time
+            self._last_frame_count = self.frame_count
+            self._last_frame_time = current_time
         
     def on_sample_app_destination(self, sink):
         self._logger.debug("Received Sample from Pipeline {id}".format(
@@ -939,7 +974,17 @@ class GStreamerPipeline(Pipeline):
 
                 # Reconnect bus
                 bus = self.pipeline.get_bus()
+                if self._pipeline_mainloop is None:
+                    self._pipeline_context = GLib.MainContext.new()
+                    self._pipeline_mainloop = GLib.MainLoop.new(self._pipeline_context, False)
+                    self._pipeline_mainloop_thread = Thread(
+                        target=self._run_pipeline_mainloop,
+                        name="pipeline-{}-mainloop".format(self.identifier))
+                    self._pipeline_mainloop_thread.daemon = True
+                    self._pipeline_mainloop_thread.start()
+                self._pipeline_context.push_thread_default()
                 bus.add_signal_watch()
+                self._pipeline_context.pop_thread_default()
                 self._bus_connection_id = bus.connect("message", self.bus_call)
 
                 # Set to playing state
