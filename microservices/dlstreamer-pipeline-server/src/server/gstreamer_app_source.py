@@ -7,7 +7,7 @@
 import json
 from collections import namedtuple
 from enum import Enum, auto
-from threading import Event, Thread
+from threading import Event, Semaphore, Thread
 
 import gi
 
@@ -43,6 +43,7 @@ class GStreamerAppSource(AppSource, Thread):
 
     def __init__(self, request, pipeline, *args, **kwargs):
         AppSource.__init__(self, request, pipeline)
+        Thread.__init__(self, daemon=True, *args, **kwargs)
         self._mode = GStreamerAppSource.Mode.PULL
         self._input_queue = None
         self._src = None
@@ -55,12 +56,10 @@ class GStreamerAppSource(AppSource, Thread):
             raise Exception("GStreamerAppSource requires GStreamerPipeline "\
                             "appsrc element and input queue")
         self._mode = GStreamerAppSource.Mode(request_config.get("mode", "pull"))
-
-        if (self._mode == GStreamerAppSource.Mode.PUSH):
-            Thread.__init__(self, daemon=True, *args, **kwargs)
-            self._stop = False
-            self._push_frames = Event()
-            self.start()
+        self._stop = False
+        self._push_frames = Event()
+        self._pull_semaphore = Semaphore(0)
+        self.start()
 
     def _create_input_frame(self, item):
         if (isinstance(item, GvaFrameData)):
@@ -68,8 +67,7 @@ class GStreamerAppSource(AppSource, Thread):
             if (item.data):
                 if (not isinstance(item.data, bytes)):
                     raise Exception("GvaFrameData must contain bytes")
-                gst_buffer = Gst.Buffer.new_allocate(None, len(item.data))
-                gst_buffer.fill(0, item.data)
+                gst_buffer = Gst.Buffer.new_wrapped(item.data)
                 if (item.pts):
                     gst_buffer.pts = item.pts
                     gst_buffer.dts = item.pts
@@ -110,8 +108,8 @@ class GStreamerAppSource(AppSource, Thread):
     def start_frames(self):
         if (self._mode == GStreamerAppSource.Mode.PUSH):
             self._push_frames.set()
-            return
-        self._get_and_push()
+        else:
+            self._pull_semaphore.release()
 
     def pause_frames(self):
         if (self._mode == GStreamerAppSource.Mode.PUSH):
@@ -120,11 +118,14 @@ class GStreamerAppSource(AppSource, Thread):
 
     def finish(self):
         self._stop = True
-        if (self._mode == GStreamerAppSource.Mode.PUSH):
-            self._push_frames.set()
+        self._push_frames.set()
+        self._pull_semaphore.release()
 
     def run(self):
         while (not self._stop):
-            self._push_frames.wait()
+            if (self._mode == GStreamerAppSource.Mode.PUSH):
+                self._push_frames.wait()
+            else:
+                self._pull_semaphore.acquire()
             if (not self._stop):
                 self._get_and_push()
