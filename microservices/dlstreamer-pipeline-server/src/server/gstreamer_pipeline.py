@@ -97,6 +97,7 @@ class GStreamerPipeline(Pipeline):
         self._dir_name = None
         self._bus_connection_id = None
         self._create_delete_lock = Lock()
+        self._latency_lock = Lock()
         self._finished_callback = finished_callback
         self._bus_messages = False
         self.appsrc_element = None
@@ -182,6 +183,7 @@ class GStreamerPipeline(Pipeline):
             self._app_destinations.append(webrtc_app_destination)
 
     def _delete_pipeline(self, new_state):
+        self._cal_avg_fps()
         self.state = new_state
         self.stop_time = time.time()
         self._logger.debug("Setting Pipeline {id}"
@@ -278,8 +280,7 @@ class GStreamerPipeline(Pipeline):
         status_obj = {
             "id": self.identifier,
             "state": self.state,
-            "avg_fps": self._avg_fps,
-            "frame_fps": self._frame_fps,
+            "avg_fps": self.get_avg_fps(),
             "start_time": self.start_time,
             "elapsed_time": elapsed_time,
             "message": message
@@ -291,7 +292,15 @@ class GStreamerPipeline(Pipeline):
         return status_obj
 
     def get_avg_fps(self):
+        self._cal_avg_fps()
         return self._avg_fps
+
+    def _cal_avg_fps(self):
+        if self.state.stopped() or self.start_time is None:
+            return
+        current_time = time.time()
+        if current_time > self.start_time:
+            self._avg_fps = self.frame_count / (current_time - self.start_time)
 
     def _get_element_property(self, element, key):
         if isinstance(element, str):
@@ -746,7 +755,8 @@ class GStreamerPipeline(Pipeline):
     def source_probe_callback(unused_pad, info, self):
         buffer = info.get_buffer()
         pts = buffer.pts
-        self.latency_times[pts] = time.time()
+        with self._latency_lock:
+            self.latency_times[pts] = time.time()
         return Gst.PadProbeReturn.OK
 
     def source_setup_callback(self, unused_bin, src_element, unused_udata):
@@ -758,7 +768,8 @@ class GStreamerPipeline(Pipeline):
     def appsink_probe_callback(unused_pad, info, self):
         buffer = info.get_buffer()
         pts = buffer.pts
-        source_time = self.latency_times.pop(pts, -1)
+        with self._latency_lock:
+            source_time = self.latency_times.pop(pts, -1)
         if source_time != -1:
             self.sum_pipeline_latency += time.time() - source_time
             self.count_pipeline_latency += 1
@@ -772,16 +783,6 @@ class GStreamerPipeline(Pipeline):
 
     def _increment_frame_count(self):
         self.frame_count += 1
-
-        current_time = time.time()
-        if current_time > self.start_time:
-          self._avg_fps = self.frame_count / (current_time - self.start_time)
-
-        delta_time = current_time - self._last_frame_time
-        if delta_time >= 1:
-          self._frame_fps = (self.frame_count - self._last_frame_count) / delta_time
-          self._last_frame_count = self.frame_count
-          self._last_frame_time = current_time
         
     def on_sample_app_destination(self, sink):
         self._logger.debug("Received Sample from Pipeline {id}".format(
