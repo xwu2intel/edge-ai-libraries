@@ -551,7 +551,9 @@ class GStreamerPipeline(Pipeline):
         src = self._get_any_source()
         if self._auto_source and src.__gtype__.name in self.GST_ELEMENTS_WITH_SOURCE_SETUP:
             src.connect("source_setup", self.source_setup_callback, src)
-        sink = self.pipeline.get_by_name("appsink")
+        sink = self.appsink_element
+        if not sink:
+            sink = self.pipeline.get_by_name("appsink")
         if (not sink):
             sink = self.pipeline.get_by_name("sink")
         if src and sink:
@@ -594,6 +596,7 @@ class GStreamerPipeline(Pipeline):
                 self._set_model_property("labels-file")
                 self._cache_inference_elements()
                 self._set_model_instance_id()
+                self._set_application_destination()
                 self._set_source_and_sink()
 
                 bus = self.pipeline.get_bus()
@@ -608,7 +611,6 @@ class GStreamerPipeline(Pipeline):
                                          None)
 
                 self._set_application_source()
-                self._set_application_destination()
                 self._log_launch_string()
 
                 if "prepare-pads" in self.config:
@@ -685,12 +687,15 @@ class GStreamerPipeline(Pipeline):
             self._app_destinations.append(app_destination)
 
         if self.appsink_element is not None:
-            self.appsink_element.set_property("emit-signals", True)
-            self.appsink_element.set_property('sync', False)
-
             if not self._app_destinations:
-                self.appsink_element.connect("new-sample", self.on_sample)
+                self.appsink_element.set_property("drop", True)
+                self.appsink_element.set_property("max-buffers", 1)
+                sink_pad = self.appsink_element.get_static_pad("sink")
+                sink_pad.add_probe(Gst.PadProbeType.BUFFER,
+                                   GStreamerPipeline._no_app_destination_probe_callback, self)
             else:
+                self.appsink_element.set_property("emit-signals", True)
+                self.appsink_element.set_property('sync', False)
                 self.appsink_element.connect("new-sample", self.on_sample_app_destination)
 
 
@@ -747,6 +752,8 @@ class GStreamerPipeline(Pipeline):
     def source_probe_callback(unused_pad, info, self):
         buffer = info.get_buffer()
         pts = buffer.pts
+        if len(self.latency_times) >= 1000:
+            self.latency_times.pop(next(iter(self.latency_times)))
         self.latency_times[pts] = time.time()
         return Gst.PadProbeReturn.OK
 
@@ -765,6 +772,11 @@ class GStreamerPipeline(Pipeline):
             self.count_pipeline_latency += 1
         return Gst.PadProbeReturn.OK
 
+    @staticmethod
+    def _no_app_destination_probe_callback(unused_pad, unused_info, self):
+        self.frame_count += 1
+        return Gst.PadProbeReturn.OK
+
     def on_sample_app_destination(self, sink):
         self._logger.debug("Received Sample from Pipeline {id}".format(
             id=self.identifier))
@@ -777,12 +789,6 @@ class GStreamerPipeline(Pipeline):
             self._logger.error("Error on Pipeline {id}: Error in App Destination: {err}".format(
                 id=self.identifier, err=error))
             return Gst.FlowReturn.ERROR
-
-        self.frame_count += 1
-        return Gst.FlowReturn.OK
-
-    def on_sample(self, sink):
-        _ = sink.emit("pull-sample")
 
         self.frame_count += 1
         return Gst.FlowReturn.OK

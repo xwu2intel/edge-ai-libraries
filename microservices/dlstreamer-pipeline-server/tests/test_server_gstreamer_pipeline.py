@@ -249,14 +249,6 @@ class TestGStreamerPipeline:
         assert elements == []
         assert mock_pipeline.iterate_elements.call_count == 3
 
-    def test_on_sample(self, mocker, gstreamer_pipeline,Gst):
-        mock_sink = MagicMock()
-        initial_frame = gstreamer_pipeline.frame_count
-        result = gstreamer_pipeline.on_sample(mock_sink)
-        mock_sink.emit.assert_called_once_with("pull-sample")
-        assert gstreamer_pipeline.frame_count == initial_frame + 1
-        assert result == Gst.FlowReturn.OK
-    
     def test_on_sample_app_destination(self, mocker, gstreamer_pipeline, Gst):
         mock_sink = MagicMock()
         mock_sample = MagicMock()
@@ -328,6 +320,19 @@ class TestGStreamerPipeline:
         assert gstreamer_pipeline.latency_times[10] == 50
         assert result == Gst.PadProbeReturn.OK
 
+    def test_source_probe_callback_limits_dict_size(self, mocker, gstreamer_pipeline, Gst):
+        mocker.patch.object(time, 'time', return_value=50)
+        mock_info = MagicMock()
+        mock_buffer = MagicMock()
+        mock_buffer.pts = 9999
+        mock_info.get_buffer.return_value = mock_buffer
+        gstreamer_pipeline.latency_times = {i: i for i in range(1000)}
+        result = gstreamer_pipeline.source_probe_callback(None, mock_info, gstreamer_pipeline)
+        assert len(gstreamer_pipeline.latency_times) == 1000
+        assert 9999 in gstreamer_pipeline.latency_times
+        assert 0 not in gstreamer_pipeline.latency_times
+        assert result == Gst.PadProbeReturn.OK
+
     def test_source_pad_added_callback(self, mocker, gstreamer_pipeline,Gst):
         mock_pad = MagicMock()
         mock_add_probe = mocker.patch.object(mock_pad, 'add_probe')
@@ -395,6 +400,29 @@ class TestGStreamerPipeline:
         gstreamer_pipeline._set_source_and_sink()
         gstreamer_pipeline._get_any_source.assert_called_once()
         mock_source.connect.assert_called_with("source_setup", gstreamer_pipeline.source_setup_callback, mock_source)
+
+    def test_set_source_and_sink_uses_appsink_element_first(self, mocker, gstreamer_pipeline, Gst):
+        mock_source = MagicMock()
+        mock_sink = MagicMock()
+        mock_source_pad = MagicMock()
+        mock_sink_pad = MagicMock()
+        mock_sink.get_static_pad.return_value = mock_sink_pad
+        mocker.patch.object(gstreamer_pipeline, "_get_any_source", return_value=mock_source)
+        gstreamer_pipeline.pipeline = MagicMock()
+        gstreamer_pipeline.appsink_element = mock_sink
+        mock_source.get_static_pad.return_value = mock_source_pad
+        gstreamer_pipeline._set_source_and_sink()
+        gstreamer_pipeline.pipeline.get_by_name.assert_not_called()
+        mock_sink.get_static_pad.assert_called_with("sink")
+        mock_sink_pad.add_probe.assert_called_with(Gst.PadProbeType.BUFFER,
+                                                    gstreamer_pipeline.appsink_probe_callback,
+                                                    gstreamer_pipeline)
+
+    def test_no_app_destination_probe_callback(self, mocker, gstreamer_pipeline, Gst):
+        initial_frame = gstreamer_pipeline.frame_count
+        result = gstreamer_pipeline._no_app_destination_probe_callback(None, None, gstreamer_pipeline)
+        assert gstreamer_pipeline.frame_count == initial_frame + 1
+        assert result == Gst.PadProbeReturn.OK
 
     def test_set_model_instance_id(self, mocker, gstreamer_pipeline):
         mock_element1 = MagicMock()
@@ -827,14 +855,20 @@ class TestGStreamerPipeline:
         with pytest.raises(Exception, match="Unsupported Metadata application Destination: app_class"):
             gstreamer_pipeline._set_application_destination()
 
-    def test_set_application_destination_no_destination(self,gstreamer_pipeline,mocker):
+    def test_set_application_destination_no_destination(self,gstreamer_pipeline,mocker,Gst):
         mock_appsink_element = MagicMock()
+        mock_sink_pad = MagicMock()
+        mock_appsink_element.get_static_pad.return_value = mock_sink_pad
         mock_get_ele_type = mocker.patch('src.server.gstreamer_pipeline.GStreamerPipeline._get_elements_by_type',return_value = [mock_appsink_element])
         mock_verify = mocker.patch.object(gstreamer_pipeline,'_verify_and_set_frame_destinations')
         gstreamer_pipeline._set_application_destination()
-        mock_appsink_element.set_property.assert_any_call("emit-signals", True)
-        mock_appsink_element.set_property.assert_any_call("sync", False)
-        mock_appsink_element.connect.assert_any_call("new-sample",gstreamer_pipeline.on_sample)
+        mock_appsink_element.set_property.assert_any_call("drop", True)
+        mock_appsink_element.set_property.assert_any_call("max-buffers", 1)
+        mock_appsink_element.get_static_pad.assert_called_once_with("sink")
+        mock_sink_pad.add_probe.assert_called_once_with(Gst.PadProbeType.BUFFER,
+                                                        GStreamerPipeline._no_app_destination_probe_callback,
+                                                        gstreamer_pipeline)
+        mock_appsink_element.connect.assert_not_called()
         mock_verify.assert_called_once()
         mock_get_ele_type.assert_called_once()
 
