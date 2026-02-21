@@ -297,7 +297,7 @@ class TestGStreamerPipeline:
         mock_buffer = MagicMock()
         mock_buffer.pts = pts
         mock_info.get_buffer.return_value = mock_buffer
-        gstreamer_pipeline.latency_times = {1234: 10}
+        gstreamer_pipeline.latency_times = {(gstreamer_pipeline.identifier, 1234): 10}
         result = gstreamer_pipeline.appsink_probe_callback(None, mock_info, gstreamer_pipeline)
         mock_info.get_buffer.assert_called_once()
         assert gstreamer_pipeline.sum_pipeline_latency == sum_latency
@@ -324,8 +324,9 @@ class TestGStreamerPipeline:
         mock_info.get_buffer.return_value = mock_buffer
         mocker.patch.object(time,'time',return_value = 50)
         result = gstreamer_pipeline.source_probe_callback(None, mock_info, gstreamer_pipeline)
-        assert 10 in gstreamer_pipeline.latency_times
-        assert gstreamer_pipeline.latency_times[10] == 50
+        expected_key = (gstreamer_pipeline.identifier, 10)
+        assert expected_key in gstreamer_pipeline.latency_times
+        assert gstreamer_pipeline.latency_times[expected_key] == 50
         assert result == Gst.PadProbeReturn.OK
 
     def test_source_pad_added_callback(self, mocker, gstreamer_pipeline,Gst):

@@ -57,6 +57,8 @@ class GStreamerPipeline(Pipeline):
     _rtsp_server = None
     _webrtc_manager = None
     CachedElement = namedtuple("CachedElement", ["element", "pipelines"])
+    _measurement_lock = Lock()
+    _sync_interval_start = None
 
     @staticmethod
     def gobject_mainloop():
@@ -97,6 +99,7 @@ class GStreamerPipeline(Pipeline):
         self._dir_name = None
         self._bus_connection_id = None
         self._create_delete_lock = Lock()
+        self._latency_lock = Lock()
         self._finished_callback = finished_callback
         self._bus_messages = False
         self.appsrc_element = None
@@ -746,7 +749,8 @@ class GStreamerPipeline(Pipeline):
     def source_probe_callback(unused_pad, info, self):
         buffer = info.get_buffer()
         pts = buffer.pts
-        self.latency_times[pts] = time.time()
+        with self._latency_lock:
+            self.latency_times[(self.identifier, pts)] = time.time()
         return Gst.PadProbeReturn.OK
 
     def source_setup_callback(self, unused_bin, src_element, unused_udata):
@@ -758,7 +762,8 @@ class GStreamerPipeline(Pipeline):
     def appsink_probe_callback(unused_pad, info, self):
         buffer = info.get_buffer()
         pts = buffer.pts
-        source_time = self.latency_times.pop(pts, -1)
+        with self._latency_lock:
+            source_time = self.latency_times.pop((self.identifier, pts), -1)
         if source_time != -1:
             self.sum_pipeline_latency += time.time() - source_time
             self.count_pipeline_latency += 1
@@ -766,7 +771,10 @@ class GStreamerPipeline(Pipeline):
 
     def _save_start_time(self):
         self.start_time = time.time()
-        self._last_frame_time = self.start_time
+        with GStreamerPipeline._measurement_lock:
+            if GStreamerPipeline._sync_interval_start is None:
+                GStreamerPipeline._sync_interval_start = self.start_time
+            self._last_frame_time = GStreamerPipeline._sync_interval_start
         self._last_frame_count = 0
         self.frame_count = 0
 
@@ -777,11 +785,17 @@ class GStreamerPipeline(Pipeline):
         if current_time > self.start_time:
           self._avg_fps = self.frame_count / (current_time - self.start_time)
 
-        delta_time = current_time - self._last_frame_time
-        if delta_time >= 1:
-          self._frame_fps = (self.frame_count - self._last_frame_count) / delta_time
+        with GStreamerPipeline._measurement_lock:
+            interval_start = GStreamerPipeline._sync_interval_start
+            if interval_start is not None and current_time - interval_start >= 1:
+                GStreamerPipeline._sync_interval_start = current_time
+                interval_start = current_time
+
+        local_delta = current_time - self._last_frame_time
+        if local_delta >= 1:
+          self._frame_fps = (self.frame_count - self._last_frame_count) / local_delta
           self._last_frame_count = self.frame_count
-          self._last_frame_time = current_time
+          self._last_frame_time = interval_start
         
     def on_sample_app_destination(self, sink):
         self._logger.debug("Received Sample from Pipeline {id}".format(
