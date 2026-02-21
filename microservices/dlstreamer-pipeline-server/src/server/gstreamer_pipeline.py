@@ -52,6 +52,7 @@ class GStreamerPipeline(Pipeline):
     GST_ELEMENTS_THAT_EMIT_SOURCE = ("GstGvaMetaConvert")
 
     _inference_element_cache = {}
+    _inference_element_cache_lock = Lock()
     _mainloop = None
     _mainloop_thread = None
     _rtsp_server = None
@@ -98,6 +99,8 @@ class GStreamerPipeline(Pipeline):
         self._dir_name = None
         self._bus_connection_id = None
         self._create_delete_lock = Lock()
+        self._latency_lock = Lock()
+        self._app_destinations_lock = Lock()
         self._finished_callback = finished_callback
         self._bus_messages = False
         self.appsrc_element = None
@@ -220,8 +223,12 @@ class GStreamerPipeline(Pipeline):
             del self._app_source
             self._app_source = None
 
-        for destination in self._app_destinations:
+        with self._app_destinations_lock:
+            destinations = list(self._app_destinations)
+        for destination in destinations:
             destination.finish()
+        with self._app_destinations_lock:
+            self._app_destinations.clear()
 
         if self.appsrc_element:
             del self.appsrc_element
@@ -231,14 +238,16 @@ class GStreamerPipeline(Pipeline):
             del self.appsink_element
             self.appsink_element = None
 
-        self._app_destinations.clear()
-
         if (new_state == Pipeline.State.ERROR):
-            for key in self._cached_element_keys:
-                for pipeline in GStreamerPipeline._inference_element_cache[key].pipelines:
-                    if (self != pipeline):
-                        pipeline.stop()
-                del GStreamerPipeline._inference_element_cache[key]
+            pipelines_to_stop = []
+            with GStreamerPipeline._inference_element_cache_lock:
+                for key in self._cached_element_keys:
+                    for pipeline in GStreamerPipeline._inference_element_cache[key].pipelines:
+                        if (self != pipeline):
+                            pipelines_to_stop.append(pipeline)
+                    del GStreamerPipeline._inference_element_cache[key]
+            for pipeline in pipelines_to_stop:
+                pipeline.stop()
 
         if self._pipeline_mainloop:
             self._pipeline_mainloop.quit()
@@ -396,12 +405,13 @@ class GStreamerPipeline(Pipeline):
                         if (element.__gtype__.name in self.GVA_INFERENCE_ELEMENT_TYPES
                             and model_instance_id in [x.name for x in element.list_properties()]
                             and element.get_property(model_instance_id))]
-        for element, key in gva_elements:
-            if key not in GStreamerPipeline._inference_element_cache:
-                GStreamerPipeline._inference_element_cache[key] = GStreamerPipeline.CachedElement(
-                    element, [])
-            self._cached_element_keys.append(key)
-            GStreamerPipeline._inference_element_cache[key].pipelines.append(self)
+        with GStreamerPipeline._inference_element_cache_lock:
+            for element, key in gva_elements:
+                if key not in GStreamerPipeline._inference_element_cache:
+                    GStreamerPipeline._inference_element_cache[key] = GStreamerPipeline.CachedElement(
+                        element, [])
+                self._cached_element_keys.append(key)
+                GStreamerPipeline._inference_element_cache[key].pipelines.append(self)
 
     def _set_default_models(self):
         model_device_pairing = [("model", "device"),
@@ -773,10 +783,11 @@ class GStreamerPipeline(Pipeline):
     def source_probe_callback(unused_pad, info, self):
         buffer = info.get_buffer()
         pts = buffer.pts
-        if len(self.latency_times) >= self.MAX_LATENCY_ENTRIES:
-            oldest = next(iter(self.latency_times))
-            del self.latency_times[oldest]
-        self.latency_times[pts] = time.time()
+        with self._latency_lock:
+            if len(self.latency_times) >= self.MAX_LATENCY_ENTRIES:
+                oldest = next(iter(self.latency_times))
+                del self.latency_times[oldest]
+            self.latency_times[pts] = time.time()
         return Gst.PadProbeReturn.OK
 
     def source_setup_callback(self, unused_bin, src_element, unused_udata):
@@ -788,7 +799,8 @@ class GStreamerPipeline(Pipeline):
     def appsink_probe_callback(unused_pad, info, self):
         buffer = info.get_buffer()
         pts = buffer.pts
-        source_time = self.latency_times.pop(pts, -1)
+        with self._latency_lock:
+            source_time = self.latency_times.pop(pts, -1)
         if source_time != -1:
             self.sum_pipeline_latency += time.time() - source_time
             self.count_pipeline_latency += 1
@@ -824,7 +836,9 @@ class GStreamerPipeline(Pipeline):
         sample = sink.emit("pull-sample")
 
         try:
-            for destination in self._app_destinations:
+            with self._app_destinations_lock:
+                destinations = list(self._app_destinations)
+            for destination in destinations:
                 destination.process_frame(sample)
         except Exception as error:
             self._logger.error("Error on Pipeline {id}: Error in App Destination: {err}".format(
