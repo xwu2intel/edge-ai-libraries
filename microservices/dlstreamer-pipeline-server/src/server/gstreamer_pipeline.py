@@ -50,6 +50,7 @@ class GStreamerPipeline(Pipeline):
     SOURCE_ALIAS = "auto_source"
     GST_ELEMENTS_WITH_SOURCE_SETUP = ("GstURISourceBin")
     GST_ELEMENTS_THAT_EMIT_SOURCE = ("GstGvaMetaConvert")
+    LATENCY_TIMEOUT = 30
 
     _inference_element_cache = {}
     _mainloop = None
@@ -86,9 +87,10 @@ class GStreamerPipeline(Pipeline):
         self._last_frame_count = 0
         self._last_frame_time = 0
         self._gst_launch_string = None
-        self.latency_times = dict()
+        self.latency_times = {}
         self.sum_pipeline_latency = 0
         self.count_pipeline_latency = 0
+        self.frame_pipeline_latency = 0
         self._real_base = None
         self._stream_base = None
         self._year_base = None
@@ -287,6 +289,7 @@ class GStreamerPipeline(Pipeline):
         if self.count_pipeline_latency != 0:
             status_obj["avg_pipeline_latency"] = self.sum_pipeline_latency / \
                 self.count_pipeline_latency
+            status_obj["frame_pipeline_latency"] = self.frame_pipeline_latency
 
         return status_obj
 
@@ -758,10 +761,16 @@ class GStreamerPipeline(Pipeline):
     def appsink_probe_callback(unused_pad, info, self):
         buffer = info.get_buffer()
         pts = buffer.pts
+        current_time = time.time()
         source_time = self.latency_times.pop(pts, -1)
         if source_time != -1:
-            self.sum_pipeline_latency += time.time() - source_time
+            self.frame_pipeline_latency = current_time - source_time
+            self.sum_pipeline_latency += self.frame_pipeline_latency
             self.count_pipeline_latency += 1
+        stale_threshold = current_time - GStreamerPipeline.LATENCY_TIMEOUT
+        stale_keys = [k for k, v in self.latency_times.items() if v < stale_threshold]
+        for k in stale_keys:
+            del self.latency_times[k]
         return Gst.PadProbeReturn.OK
 
     def _save_start_time(self):
@@ -907,6 +916,7 @@ class GStreamerPipeline(Pipeline):
                 self.latency_times.clear()
                 self.sum_pipeline_latency = 0
                 self.count_pipeline_latency = 0
+                self.frame_pipeline_latency = 0
 
                 # Rebuild the pipeline from scratch (reusing start() logic)
                 gst_launch_string = string.Formatter().vformat(
