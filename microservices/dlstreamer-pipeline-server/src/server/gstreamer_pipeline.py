@@ -50,6 +50,7 @@ class GStreamerPipeline(Pipeline):
     SOURCE_ALIAS = "auto_source"
     GST_ELEMENTS_WITH_SOURCE_SETUP = ("GstURISourceBin")
     GST_ELEMENTS_THAT_EMIT_SOURCE = ("GstGvaMetaConvert")
+    LATENCY_TIMEOUT = 30
 
     _inference_element_cache = {}
     _mainloop = None
@@ -85,10 +86,12 @@ class GStreamerPipeline(Pipeline):
         self._frame_fps = 0
         self._last_frame_count = 0
         self._last_frame_time = 0
+        self._fps_start_time = None
         self._gst_launch_string = None
-        self.latency_times = dict()
+        self.latency_times = {}
         self.sum_pipeline_latency = 0
         self.count_pipeline_latency = 0
+        self.frame_pipeline_latency = 0
         self._real_base = None
         self._stream_base = None
         self._year_base = None
@@ -285,8 +288,13 @@ class GStreamerPipeline(Pipeline):
             "message": message
         }
         if self.count_pipeline_latency != 0:
+            # avg_pipeline_latency: mean latency (seconds) across all frames
+            # processed since the pipeline started (or last reset).
             status_obj["avg_pipeline_latency"] = self.sum_pipeline_latency / \
                 self.count_pipeline_latency
+            # frame_pipeline_latency: latency (seconds) of the most recently
+            # processed frame — useful for spotting real-time spikes.
+            status_obj["frame_pipeline_latency"] = self.frame_pipeline_latency
 
         return status_obj
 
@@ -746,7 +754,10 @@ class GStreamerPipeline(Pipeline):
     def source_probe_callback(unused_pad, info, self):
         buffer = info.get_buffer()
         pts = buffer.pts
-        self.latency_times[pts] = time.time()
+        # Record the monotonic entry time for this frame (keyed by its presentation
+        # timestamp).  The appsink probe will pop this value and compute the
+        # difference to measure how long the frame spent traversing the pipeline.
+        self.latency_times[pts] = time.monotonic()
         return Gst.PadProbeReturn.OK
 
     def source_setup_callback(self, unused_bin, src_element, unused_udata):
@@ -756,26 +767,45 @@ class GStreamerPipeline(Pipeline):
 
     @staticmethod
     def appsink_probe_callback(unused_pad, info, self):
+        # Frame latency = time the frame exits the pipeline (appsink)
+        #               - time the frame entered the pipeline (source probe).
+        # Both timestamps are taken with time.monotonic() so the measurement is
+        # immune to wall-clock adjustments (NTP, DST, etc.).
         buffer = info.get_buffer()
         pts = buffer.pts
+        current_time = time.monotonic()
         source_time = self.latency_times.pop(pts, -1)
         if source_time != -1:
-            self.sum_pipeline_latency += time.time() - source_time
+            self.frame_pipeline_latency = current_time - source_time
+            self.sum_pipeline_latency += self.frame_pipeline_latency
             self.count_pipeline_latency += 1
+        # Remove entries older than LATENCY_TIMEOUT seconds to prevent unbounded
+        # memory growth when frames are dropped or lost before reaching the sink.
+        # Frames arrive in order, so latency_times entries are chronological
+        # (oldest first).  Walk from the front and stop at the first fresh entry
+        # — O(stale count) with no intermediate list allocation.
+        stale_threshold = current_time - GStreamerPipeline.LATENCY_TIMEOUT
+        while self.latency_times:
+            k, v = next(iter(self.latency_times.items()))
+            if v < stale_threshold:
+                del self.latency_times[k]
+            else:
+                break
         return Gst.PadProbeReturn.OK
 
     def _save_start_time(self):
         self.start_time = time.time()
-        self._last_frame_time = self.start_time
+        self._fps_start_time = time.monotonic()
+        self._last_frame_time = self._fps_start_time
         self._last_frame_count = 0
         self.frame_count = 0
 
     def _increment_frame_count(self):
         self.frame_count += 1
 
-        current_time = time.time()
-        if current_time > self.start_time:
-          self._avg_fps = self.frame_count / (current_time - self.start_time)
+        current_time = time.monotonic()
+        if current_time > self._fps_start_time:
+          self._avg_fps = self.frame_count / (current_time - self._fps_start_time)
 
         delta_time = current_time - self._last_frame_time
         if delta_time >= 1:
@@ -907,6 +937,7 @@ class GStreamerPipeline(Pipeline):
                 self.latency_times.clear()
                 self.sum_pipeline_latency = 0
                 self.count_pipeline_latency = 0
+                self.frame_pipeline_latency = 0
 
                 # Rebuild the pipeline from scratch (reusing start() logic)
                 gst_launch_string = string.Formatter().vformat(
