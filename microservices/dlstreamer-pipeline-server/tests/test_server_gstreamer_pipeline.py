@@ -143,24 +143,21 @@ class TestGStreamerPipeline:
         assert times == expected_times
 
     @pytest.mark.parametrize(
-    "stopped, expected_fps, start_time",
-        [(False, 10, 10),
-        (True, 0, 10),
-        (False, 0, None)])
-    def test_cal_avg_fps(self, gstreamer_pipeline, mocker,stopped,expected_fps,start_time):
-        gstreamer_pipeline.state = MagicMock()
-        gstreamer_pipeline.state.stopped.return_value = stopped
-        mocker.patch.object(time,'time',return_value = 20)
-        gstreamer_pipeline.start_time = start_time
-        gstreamer_pipeline.frame_count = 100
-        gstreamer_pipeline._cal_avg_fps()
+    "fps_start_time, monotonic_time, frame_count, expected_fps",
+        [(10, 20, 99, 10.0),
+         (10, 10, 99, 0),
+         (20, 10, 99, 0)])
+    def test_increment_frame_count(self, gstreamer_pipeline, mocker, fps_start_time, monotonic_time, frame_count, expected_fps):
+        mocker.patch.object(time, 'monotonic', return_value=monotonic_time)
+        gstreamer_pipeline._fps_start_time = fps_start_time
+        gstreamer_pipeline._last_frame_time = fps_start_time
+        gstreamer_pipeline.frame_count = frame_count
+        gstreamer_pipeline._increment_frame_count()
         assert gstreamer_pipeline._avg_fps == expected_fps
-    
-    def test_get_avg_fps(self,gstreamer_pipeline,mocker):
-        mocker.patch.object(gstreamer_pipeline,'_cal_avg_fps')
-        avg_fps = gstreamer_pipeline.get_avg_fps()
-        gstreamer_pipeline._cal_avg_fps.assert_called_once()
-        assert avg_fps == 0
+
+    def test_get_avg_fps(self, gstreamer_pipeline):
+        gstreamer_pipeline._avg_fps = 42.0
+        assert gstreamer_pipeline.get_avg_fps() == 42.0
 
     def test_stop_running_pipeline(self, mocker, gstreamer_pipeline,Gst):
         gstreamer_pipeline.state = MagicMock()
@@ -571,7 +568,6 @@ class TestGStreamerPipeline:
         mock_logger.debug.assert_not_called()
 
     def test_delete_pipeline(self, mocker, gstreamer_pipeline,Gst):
-        gstreamer_pipeline._cal_avg_fps = MagicMock()
         mock_state = MagicMock()
         mocker.patch.object(time,'time',return_value = 30)
         mock_pipeline = MagicMock()
@@ -593,7 +589,6 @@ class TestGStreamerPipeline:
         assert gstreamer_pipeline.appsink_element is None
         assert gstreamer_pipeline._bus_connection_id is None
         assert gstreamer_pipeline._app_destinations == []
-        gstreamer_pipeline._cal_avg_fps.assert_called_once()
         mock_pipeline.get_bus.assert_called_once()
         mock_bus.remove_signal_watch.assert_called_once()
         mock_bus.disconnect.assert_called_once_with(1)
@@ -603,7 +598,6 @@ class TestGStreamerPipeline:
         gstreamer_pipeline._finished_callback.assert_called_once()
 
     def test_delete_pipeline_with_error_state(self, mocker, gstreamer_pipeline):
-        gstreamer_pipeline._cal_avg_fps = MagicMock()
         mock_pipeline = MagicMock()
         mock_stop_pipeline = MagicMock()
         mock_state = mocker.patch('src.server.gstreamer_pipeline.Pipeline.State',return_value = MagicMock())
@@ -611,7 +605,6 @@ class TestGStreamerPipeline:
         GStreamerPipeline._inference_element_cache = {'key1':mock_pipeline}
         mock_pipeline.pipelines = [mock_stop_pipeline]
         gstreamer_pipeline._delete_pipeline(mock_state.ERROR)
-        gstreamer_pipeline._cal_avg_fps.assert_called_once()
         mock_stop_pipeline.stop.assert_called_once()
         assert gstreamer_pipeline.pipeline is None
         assert gstreamer_pipeline._app_source is None
