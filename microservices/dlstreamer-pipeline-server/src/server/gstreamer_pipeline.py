@@ -86,6 +86,7 @@ class GStreamerPipeline(Pipeline):
         self._frame_fps = 0
         self._last_frame_count = 0
         self._last_frame_time = 0
+        self._fps_start_time = None
         self._gst_launch_string = None
         self.latency_times = {}
         self.sum_pipeline_latency = 0
@@ -775,16 +776,17 @@ class GStreamerPipeline(Pipeline):
 
     def _save_start_time(self):
         self.start_time = time.time()
-        self._last_frame_time = self.start_time
+        self._fps_start_time = time.monotonic()
+        self._last_frame_time = self._fps_start_time
         self._last_frame_count = 0
         self.frame_count = 0
 
     def _increment_frame_count(self):
         self.frame_count += 1
 
-        current_time = time.time()
-        if current_time > self.start_time:
-          self._avg_fps = self.frame_count / (current_time - self.start_time)
+        current_time = time.monotonic()
+        if current_time > self._fps_start_time:
+          self._avg_fps = self.frame_count / (current_time - self._fps_start_time)
 
         delta_time = current_time - self._last_frame_time
         if delta_time >= 1:
