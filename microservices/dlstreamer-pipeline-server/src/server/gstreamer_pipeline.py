@@ -288,8 +288,12 @@ class GStreamerPipeline(Pipeline):
             "message": message
         }
         if self.count_pipeline_latency != 0:
+            # avg_pipeline_latency: mean latency (seconds) across all frames
+            # processed since the pipeline started (or last reset).
             status_obj["avg_pipeline_latency"] = self.sum_pipeline_latency / \
                 self.count_pipeline_latency
+            # frame_pipeline_latency: latency (seconds) of the most recently
+            # processed frame — useful for spotting real-time spikes.
             status_obj["frame_pipeline_latency"] = self.frame_pipeline_latency
 
         return status_obj
@@ -750,6 +754,9 @@ class GStreamerPipeline(Pipeline):
     def source_probe_callback(unused_pad, info, self):
         buffer = info.get_buffer()
         pts = buffer.pts
+        # Record the monotonic entry time for this frame (keyed by its presentation
+        # timestamp).  The appsink probe will pop this value and compute the
+        # difference to measure how long the frame spent traversing the pipeline.
         self.latency_times[pts] = time.monotonic()
         return Gst.PadProbeReturn.OK
 
@@ -760,6 +767,10 @@ class GStreamerPipeline(Pipeline):
 
     @staticmethod
     def appsink_probe_callback(unused_pad, info, self):
+        # Frame latency = time the frame exits the pipeline (appsink)
+        #               - time the frame entered the pipeline (source probe).
+        # Both timestamps are taken with time.monotonic() so the measurement is
+        # immune to wall-clock adjustments (NTP, DST, etc.).
         buffer = info.get_buffer()
         pts = buffer.pts
         current_time = time.monotonic()
@@ -768,6 +779,8 @@ class GStreamerPipeline(Pipeline):
             self.frame_pipeline_latency = current_time - source_time
             self.sum_pipeline_latency += self.frame_pipeline_latency
             self.count_pipeline_latency += 1
+        # Remove entries older than LATENCY_TIMEOUT seconds to prevent unbounded
+        # memory growth when frames are dropped or lost before reaching the sink.
         stale_threshold = current_time - GStreamerPipeline.LATENCY_TIMEOUT
         stale_keys = [k for k, v in self.latency_times.items() if v < stale_threshold]
         for k in stale_keys:
