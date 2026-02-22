@@ -749,7 +749,7 @@ class GStreamerPipeline(Pipeline):
     def source_probe_callback(unused_pad, info, self):
         buffer = info.get_buffer()
         pts = buffer.pts
-        self.latency_times[pts] = time.time()
+        self.latency_times[pts] = time.monotonic()
         return Gst.PadProbeReturn.OK
 
     def source_setup_callback(self, unused_bin, src_element, unused_udata):
@@ -761,7 +761,7 @@ class GStreamerPipeline(Pipeline):
     def appsink_probe_callback(unused_pad, info, self):
         buffer = info.get_buffer()
         pts = buffer.pts
-        current_time = time.time()
+        current_time = time.monotonic()
         source_time = self.latency_times.pop(pts, -1)
         if source_time != -1:
             self.frame_pipeline_latency = current_time - source_time

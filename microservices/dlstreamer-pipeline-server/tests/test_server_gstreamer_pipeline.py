@@ -292,7 +292,7 @@ class TestGStreamerPipeline:
             (123, 0, 0, 0)
         ])
     def test_appsink_probe_callback(self, mocker,Gst,gstreamer_pipeline,pts,sum_latency,count_latency,frame_latency):
-        mocker.patch.object(time,'time',return_value = 30)
+        mocker.patch.object(time,'monotonic',return_value = 30)
         mock_info = MagicMock()
         mock_buffer = MagicMock()
         mock_buffer.pts = pts
@@ -306,7 +306,7 @@ class TestGStreamerPipeline:
         assert result == Gst.PadProbeReturn.OK
 
     def test_appsink_probe_callback_stale_cleanup(self, mocker, Gst, gstreamer_pipeline):
-        mocker.patch.object(time, 'time', return_value=100)
+        mocker.patch.object(time, 'monotonic', return_value=100)
         mock_info = MagicMock()
         mock_buffer = MagicMock()
         mock_buffer.pts = 9999
@@ -336,7 +336,7 @@ class TestGStreamerPipeline:
         mock_buffer = MagicMock()
         mock_buffer.pts = 10
         mock_info.get_buffer.return_value = mock_buffer
-        mocker.patch.object(time,'time',return_value = 50)
+        mocker.patch.object(time,'monotonic',return_value = 50)
         result = gstreamer_pipeline.source_probe_callback(None, mock_info, gstreamer_pipeline)
         assert 10 in gstreamer_pipeline.latency_times
         assert gstreamer_pipeline.latency_times[10] == 50
