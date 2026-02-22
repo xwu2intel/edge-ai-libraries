@@ -286,12 +286,12 @@ class TestGStreamerPipeline:
         assert result == Gst.FlowReturn.ERROR
 
     @pytest.mark.parametrize(
-        "pts, sum_latency, count_latency",
+        "pts, sum_latency, count_latency, expected_frame_latency",
         [
-            (1234, 20, 1),
-            (123, 0, 0)
+            (1234, 20, 1, 20),
+            (123, 0, 0, None)
         ])
-    def test_appsink_probe_callback(self, mocker,Gst,gstreamer_pipeline,pts,sum_latency,count_latency):
+    def test_appsink_probe_callback(self, mocker,Gst,gstreamer_pipeline,pts,sum_latency,count_latency,expected_frame_latency):
         mocker.patch.object(time,'time',return_value = 30)
         mock_info = MagicMock()
         mock_buffer = MagicMock()
@@ -302,7 +302,24 @@ class TestGStreamerPipeline:
         mock_info.get_buffer.assert_called_once()
         assert gstreamer_pipeline.sum_pipeline_latency == sum_latency
         assert gstreamer_pipeline.count_pipeline_latency == count_latency
+        assert gstreamer_pipeline.frame_latency == expected_frame_latency
         assert result == Gst.PadProbeReturn.OK
+
+    def test_appsink_probe_callback_stale_cleanup(self, mocker, Gst, gstreamer_pipeline):
+        current_time = 1000.0
+        mocker.patch.object(time, 'time', return_value=current_time)
+        mock_info = MagicMock()
+        mock_buffer = MagicMock()
+        mock_buffer.pts = 9999
+        mock_info.get_buffer.return_value = mock_buffer
+        # stale entry older than timeout, fresh entry within timeout
+        gstreamer_pipeline.latency_times = {
+            1: current_time - gstreamer_pipeline._latency_timeout - 1,
+            2: current_time - 1,
+        }
+        gstreamer_pipeline.appsink_probe_callback(None, mock_info, gstreamer_pipeline)
+        assert 1 not in gstreamer_pipeline.latency_times
+        assert 2 in gstreamer_pipeline.latency_times
 
     def test_source_setup_callback(self, mocker, gstreamer_pipeline):
         mock_src_element = MagicMock()
@@ -392,9 +409,30 @@ class TestGStreamerPipeline:
         mocker.patch.object(gstreamer_pipeline, "_get_any_source", return_value=mock_source)
         gstreamer_pipeline.pipeline = MagicMock()
         gstreamer_pipeline.pipeline.get_by_name.return_value = None
+        mock_iterator = MagicMock()
+        mock_iterator.next.return_value = (Gst.IteratorResult.DONE, None)
+        gstreamer_pipeline.pipeline.iterate_sinks.return_value = mock_iterator
         gstreamer_pipeline._set_source_and_sink()
         gstreamer_pipeline._get_any_source.assert_called_once()
         mock_source.connect.assert_called_with("source_setup", gstreamer_pipeline.source_setup_callback, mock_source)
+
+    def test_set_source_and_sink_with_dynamic_sink(self, mocker, gstreamer_pipeline, Gst):
+        mock_source = MagicMock()
+        mock_source_pad = MagicMock()
+        mock_sink = MagicMock()
+        mock_sink_pad = MagicMock()
+        mock_sink.get_static_pad.return_value = mock_sink_pad
+        mocker.patch.object(gstreamer_pipeline, "_get_any_source", return_value=mock_source)
+        gstreamer_pipeline.pipeline = MagicMock()
+        gstreamer_pipeline.pipeline.get_by_name.return_value = None
+        mock_source.get_static_pad.return_value = mock_source_pad
+        mock_iterator = MagicMock()
+        mock_iterator.next.return_value = (Gst.IteratorResult.OK, mock_sink)
+        gstreamer_pipeline.pipeline.iterate_sinks.return_value = mock_iterator
+        gstreamer_pipeline._set_source_and_sink()
+        gstreamer_pipeline.pipeline.iterate_sinks.assert_called_once()
+        mock_sink.get_static_pad.assert_called_with("sink")
+        mock_sink_pad.add_probe.assert_called_with(Gst.PadProbeType.BUFFER, gstreamer_pipeline.appsink_probe_callback, gstreamer_pipeline)
 
     def test_set_model_instance_id(self, mocker, gstreamer_pipeline):
         mock_element1 = MagicMock()
@@ -510,6 +548,29 @@ class TestGStreamerPipeline:
             "elapsed_time": 0,
             "message": "Debug",
             "avg_pipeline_latency": 25}
+        result = gstreamer_pipeline.status()
+        assert result == expected_status
+
+    def test_status_with_frame_latency(self, mocker, gstreamer_pipeline):
+        mocker.patch.object(time,'time',return_value = 30)
+        gstreamer_pipeline.start_time = 15
+        gstreamer_pipeline.stop_time = 10
+        gstreamer_pipeline._debug_message = "Debug message\nDebug"
+        mock_state = MagicMock()
+        gstreamer_pipeline.state = mock_state
+        mocker.patch.object(gstreamer_pipeline,'get_avg_fps',return_value = 10)
+        gstreamer_pipeline.count_pipeline_latency = 2
+        gstreamer_pipeline.sum_pipeline_latency = 50
+        gstreamer_pipeline.frame_latency = 18
+        expected_status = {
+            "id": "test_id",
+            "state": mock_state,
+            "avg_fps": 10,
+            "start_time": 15,
+            "elapsed_time": 0,
+            "message": "Debug",
+            "avg_pipeline_latency": 25,
+            "frame_latency": 18}
         result = gstreamer_pipeline.status()
         assert result == expected_status
 

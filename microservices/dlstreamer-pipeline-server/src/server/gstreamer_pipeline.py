@@ -86,9 +86,11 @@ class GStreamerPipeline(Pipeline):
         self._last_frame_count = 0
         self._last_frame_time = 0
         self._gst_launch_string = None
-        self.latency_times = dict()
+        self.latency_times = {}
         self.sum_pipeline_latency = 0
         self.count_pipeline_latency = 0
+        self.frame_latency = None
+        self._latency_timeout = 30
         self._real_base = None
         self._stream_base = None
         self._year_base = None
@@ -287,6 +289,8 @@ class GStreamerPipeline(Pipeline):
         if self.count_pipeline_latency != 0:
             status_obj["avg_pipeline_latency"] = self.sum_pipeline_latency / \
                 self.count_pipeline_latency
+        if self.frame_latency is not None:
+            status_obj["frame_latency"] = self.frame_latency
 
         return status_obj
 
@@ -552,8 +556,17 @@ class GStreamerPipeline(Pipeline):
         if self._auto_source and src.__gtype__.name in self.GST_ELEMENTS_WITH_SOURCE_SETUP:
             src.connect("source_setup", self.source_setup_callback, src)
         sink = self.pipeline.get_by_name("appsink")
-        if (not sink):
+        if not sink:
             sink = self.pipeline.get_by_name("sink")
+        if not sink:
+            # Fall back to dynamic sink detection using GStreamer's iterator
+            try:
+                it = self.pipeline.iterate_sinks()
+                result, element = it.next()
+                if result == Gst.IteratorResult.OK:
+                    sink = element
+            except (ValueError, TypeError):
+                pass
         if src and sink:
             src_pad = src.get_static_pad("src")
             if (src_pad):
@@ -758,10 +771,19 @@ class GStreamerPipeline(Pipeline):
     def appsink_probe_callback(unused_pad, info, self):
         buffer = info.get_buffer()
         pts = buffer.pts
-        source_time = self.latency_times.pop(pts, -1)
-        if source_time != -1:
-            self.sum_pipeline_latency += time.time() - source_time
+        current_time = time.time()
+        source_time = self.latency_times.pop(pts, None)
+        if source_time is not None:
+            latency = current_time - source_time
+            self.frame_latency = latency
+            self.sum_pipeline_latency += latency
             self.count_pipeline_latency += 1
+        # Clean up stale entries older than the timeout threshold
+        timeout = self._latency_timeout
+        stale_keys = [k for k, v in self.latency_times.items()
+                      if current_time - v > timeout]
+        for k in stale_keys:
+            del self.latency_times[k]
         return Gst.PadProbeReturn.OK
 
     def _save_start_time(self):
@@ -907,6 +929,7 @@ class GStreamerPipeline(Pipeline):
                 self.latency_times.clear()
                 self.sum_pipeline_latency = 0
                 self.count_pipeline_latency = 0
+                self.frame_latency = None
 
                 # Rebuild the pipeline from scratch (reusing start() logic)
                 gst_launch_string = string.Formatter().vformat(
