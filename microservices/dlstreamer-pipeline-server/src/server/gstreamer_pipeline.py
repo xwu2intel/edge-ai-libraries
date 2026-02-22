@@ -781,10 +781,16 @@ class GStreamerPipeline(Pipeline):
             self.count_pipeline_latency += 1
         # Remove entries older than LATENCY_TIMEOUT seconds to prevent unbounded
         # memory growth when frames are dropped or lost before reaching the sink.
+        # Frames arrive in order, so latency_times entries are chronological
+        # (oldest first).  Walk from the front and stop at the first fresh entry
+        # — O(stale count) with no intermediate list allocation.
         stale_threshold = current_time - GStreamerPipeline.LATENCY_TIMEOUT
-        stale_keys = [k for k, v in self.latency_times.items() if v < stale_threshold]
-        for k in stale_keys:
-            del self.latency_times[k]
+        while self.latency_times:
+            k, v = next(iter(self.latency_times.items()))
+            if v < stale_threshold:
+                del self.latency_times[k]
+            else:
+                break
         return Gst.PadProbeReturn.OK
 
     def _save_start_time(self):
