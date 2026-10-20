@@ -104,7 +104,7 @@ act_helper () {
   local mods_file="$(ensure_project_path)/$installer_name/modules"
   local explicit_mods="$(act_extract_modules $act_name "$@")"
   local remove_all=0
-  if [[ "$act_name" = "remove" && " $* " = *" --remove-all "* ]]; then
+  if [[ "$act_name" = "remove" && -n "$act_text" && " $* " = *" --remove-all "* ]]; then
     if [ -z "${explicit_mods// }" ]; then
       remove_all=1
     else
@@ -119,7 +119,7 @@ act_helper () {
   local handles=($(act_find_deps $act_name "$@"))
 
   # refuse to remove modules that other installed modules still depend on
-  if [ "$act_name" = "remove" ] && [ $remove_all -eq 0 ] && [ ${#handles[@]} -gt 0 ]; then
+  if [[ "$act_name" = "remove" && -n "$act_text" && $remove_all -eq 0 && ${#handles[@]} -gt 0 ]]; then
     local _targets=() _top=0 _h _o _pair
     for _h in $(printf '%s\n' "${handles[@]}" | sort $sort_options); do
       _o=${_h#*_}; _o=${_o%%_*}
@@ -142,7 +142,7 @@ act_helper () {
 
   # act in sequence
   if [ ${#handles[@]} -gt 0 ]; then
-    if [ "$act_name" = "install" ]; then
+    if [[ "$act_name" = "install" && -n "$act_text" ]]; then
       # build license gate
       local -A licenses=() licenses_text=()
       local all_install_modules="${handles[*]#${installer_family}_*_install_}"
@@ -193,7 +193,7 @@ act_helper () {
     {
       for handler in $(echo "${handles[*]}" | tr ' ' '\n' | sort $sort_options); do
         local name1=${handler#*_*_*_}
-        if [ "$act_name" = "remove" ] && [ $remove_all -eq 0 ]; then
+        if [[ "$act_name" = "remove" && -n "$act_text" && $remove_all -eq 0 ]]; then
           local order1=${handler#*_};order1=${order1%%_*}
           [ "$order" -gt 0 ] || order=$order1
           [ "$order1" -ge "$order" ] || break
@@ -206,16 +206,16 @@ act_helper () {
         else
           local started_path="$(ensure_project_path)/$installer_name/started/$name1"
           local installed_path="$(ensure_project_path)/$installer_name/installed/$name1"
-          [ "$act_name" = "start" ] && mkdir -p "$started_path"
-          [ "$act_name" = "install" ] && mkdir -p "$installed_path"
+          [[ "$act_name" = "start" && -n "$act_text" ]] && mkdir -p "$started_path"
+          [[ "$act_name" = "install" && -n "$act_text" ]] && mkdir -p "$installed_path"
           echo "@@COMP $name1"
           local rc1=0
           ( set -e; $handler $invoke_args) &
           wait $! || rc1=$?
 
           if [ $rc1 -eq 0 ]; then
-            [[ " stop remove " = *" $act_name "* ]] && rm -rf "$started_path" 2> /dev/null
-            [ "$act_name" = "remove" ] && rm -rf "$installed_path" 2> /dev/null
+            [[ " stop remove " = *" $act_name "* && -n "$act_text" ]] && rm -rf "$started_path" 2> /dev/null
+            [[ "$act_name" = "remove" && -n "$act_text" ]] && rm -rf "$installed_path" 2> /dev/null
             echo "@@OK $name1"
           else
             echo "@@FAIL $name1"

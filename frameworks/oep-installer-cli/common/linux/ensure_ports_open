@@ -1,19 +1,18 @@
 
 # ensure ports are open
 ensure_ports_open () {
-  local ports="$1" out; shift
-  for port in $ports; do
-    if command -v ss > /dev/null; then
-      out="$(ss -Hltunp "sport = :$port")" || continue
-      [ -n "$out" ] || continue
-      printf "${red}port %s occupied${reset}\n%s\n" "$port" "$out" >&2
-      subcommand_stop --continue || true
-      [ -n "$(ss -Hltuanp "sport = :$port")" ] || continue
-    else
-      echo "Missing ss" 1>&2
-      return 1
-    fi
-    echo "TCP port $port is occupied" 1>&2
+  if command -v ss > /dev/null; then
+    echo "Missing ss on the system" >&2
+    return 1
+  fi
+  local port out
+  for port in "$@"; do
+    out="$(ss -Hltunp "sport = :$port")" || continue
+    [ -n "$out" ] || continue
+    printf "${red}port %s occupied${reset}\n%s\n" "$port" "$out" >&2
+    act_helper "stop," "-r" --continue
+    [ -n "$(ss -Hltuanp "sport = :$port")" ] || continue
+    printf "${red}port %s is occupied${reset}" "$port" 1>&2
     return 3
   done
 }
