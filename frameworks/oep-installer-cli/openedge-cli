@@ -13,7 +13,7 @@ main () {
   . /etc/os-release
   installer_family="$(x="${ID_LIKE:-$ID}";x="${x##* }";echo "${x//[^a-zA-Z0-9]/}")"
 
-  local _globals=() _cmds=() _args=() cur=-1 v
+  local _globals=($(declare -f configure_global_options > /dev/null 2>&1 && configure_global_options "$@")) _cmds=() _args=() cur=-1 v
   for v in "$@"; do
     case $v in
     --help)
